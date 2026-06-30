@@ -41,7 +41,10 @@ func (s *Server) handleStore(_ context.Context, req gomcp.CallToolRequest) (*gom
 	if err != nil {
 		return errResult(err), nil
 	}
-	m, _ := s.db.Get(id)
+	m, err := s.db.Get(id)
+	if err != nil {
+		return textResult(map[string]any{"id": id}), nil
+	}
 	return textResult(map[string]any{
 		"id":      id,
 		"created": m.Created.Format("2006-01-02T15:04:05"),
