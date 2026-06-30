@@ -182,7 +182,7 @@ func (d *DB) List(opts ListOptions) ([]Memory, error) {
 		if err != nil {
 			return nil, err
 		}
-		where = append(where, "created >= datetime('now', ?)")
+		where = append(where, "created >= strftime('%Y-%m-%dT%H:%M:%S','now', ?)")
 		args = append(args, fmt.Sprintf("-%d days", days))
 	}
 	if len(where) > 0 {
