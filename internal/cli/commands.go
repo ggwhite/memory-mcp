@@ -9,8 +9,10 @@ import (
 	"strings"
 
 	"memory-mcp/internal/db"
+	memcp "memory-mcp/internal/mcp"
 
 	"github.com/spf13/cobra"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 var (
@@ -80,7 +82,7 @@ func init() {
 
 	exportCmd.Flags().String("format", "json", "export format")
 
-	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd)
+	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd)
 }
 
 var storeCmd = &cobra.Command{
@@ -276,6 +278,21 @@ var exportCmd = &cobra.Command{
 			return err
 		}
 		return printJSON(memories)
+	},
+}
+
+var serveCmd = &cobra.Command{
+	Use:   "serve",
+	Short: "Start stdio MCP server",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		d, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer d.Close()
+
+		srv := memcp.NewServer(d).MCPServer()
+		return mcpserver.ServeStdio(srv)
 	},
 }
 
