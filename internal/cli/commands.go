@@ -82,7 +82,11 @@ func init() {
 
 	exportCmd.Flags().String("format", "json", "export format")
 
-	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd)
+	contextCmd.Flags().String("type", "", "filter by memory type")
+	contextCmd.Flags().String("project", "", "filter to a specific project")
+	contextCmd.Flags().IntP("limit", "n", 20, "max memories to include")
+
+	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd)
 }
 
 var storeCmd = &cobra.Command{
@@ -293,6 +297,33 @@ var serveCmd = &cobra.Command{
 
 		srv := memcp.NewServer(d).MCPServer()
 		return mcpserver.ServeStdio(srv)
+	},
+}
+
+var contextCmd = &cobra.Command{
+	Use:   "context",
+	Short: "Show a bounded memory digest for context injection",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		typ, _ := cmd.Flags().GetString("type")
+		project, _ := cmd.Flags().GetString("project")
+		limit, _ := cmd.Flags().GetInt("limit")
+
+		d, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer d.Close()
+
+		summary, err := d.Context(db.ContextOptions{
+			Type:    typ,
+			Project: project,
+			Limit:   limit,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Print(summary)
+		return nil
 	},
 }
 
