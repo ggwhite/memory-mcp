@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS memories (
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     content, tags, project,
-    content=memories, content_rowid=id
+    content=memories, content_rowid=id,
+    tokenize='trigram'
 );
 
 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
