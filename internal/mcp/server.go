@@ -97,6 +97,23 @@ func (s *Server) handleDelete(_ context.Context, req gomcp.CallToolRequest) (*go
 	return textResult(map[string]any{"deleted": true}), nil
 }
 
+// handleContext 產生 bounded 記憶摘要。
+func (s *Server) handleContext(_ context.Context, req gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	limit := req.GetInt("limit", 20)
+	if limit <= 0 {
+		limit = 20
+	}
+	summary, err := s.db.Context(db.ContextOptions{
+		Type:    req.GetString("type", ""),
+		Project: req.GetString("project", ""),
+		Limit:   limit,
+	})
+	if err != nil {
+		return errResult(err), nil
+	}
+	return gomcp.NewToolResultText(summary), nil
+}
+
 // MCPServer 建立並回傳已註冊 tools 的 MCP server 實例。
 func (s *Server) MCPServer() *mcpserver.MCPServer {
 	srv := mcpserver.NewMCPServer(
@@ -105,31 +122,38 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	)
 
 	srv.AddTool(gomcp.NewTool("memory_store",
-		gomcp.WithDescription("Store a new memory"),
-		gomcp.WithString("type", gomcp.Required(), gomcp.Description("Memory type: feedback, til, summary, or knowledge")),
-		gomcp.WithString("content", gomcp.Required(), gomcp.Description("Memory content")),
-		gomcp.WithString("tags", gomcp.Description("Comma-separated tags")),
-		gomcp.WithString("project", gomcp.Description("Project name")),
+		gomcp.WithDescription("Persist a piece of knowledge across sessions. Use PROACTIVELY when: you fix a tricky bug (type=til), the user corrects your approach or states a preference (type=feedback), you finish a work session (type=summary), or you discover cross-project architectural knowledge (type=knowledge). Don't wait to be asked — store immediately when something is worth remembering."),
+		gomcp.WithString("type", gomcp.Required(), gomcp.Description("feedback=user preferences/corrections, til=technical solutions, summary=session/work summaries, knowledge=cross-project insights")),
+		gomcp.WithString("content", gomcp.Required(), gomcp.Description("Memory content — be specific and self-contained so it's useful without context")),
+		gomcp.WithString("tags", gomcp.Description("Comma-separated tags for categorization")),
+		gomcp.WithString("project", gomcp.Description("Project name for scoping")),
 	), s.handleStore)
 
 	srv.AddTool(gomcp.NewTool("memory_search",
-		gomcp.WithDescription("Search memories using FTS5 full-text search"),
-		gomcp.WithString("query", gomcp.Required(), gomcp.Description("Search query")),
-		gomcp.WithString("type", gomcp.Description("Filter by memory type")),
+		gomcp.WithDescription("Search past memories by keyword (FTS5). Use when: starting a new task (check for relevant past solutions), hitting a familiar-looking problem (search for prior fixes), needing to recall user preferences, or working on a project you've touched before."),
+		gomcp.WithString("query", gomcp.Required(), gomcp.Description("Search keywords — supports CJK, minimum 3 characters")),
+		gomcp.WithString("type", gomcp.Description("Filter by type: feedback, til, summary, knowledge")),
 		gomcp.WithNumber("limit", gomcp.Description("Max results (default 5)")),
 	), s.handleSearch)
 
 	srv.AddTool(gomcp.NewTool("memory_list",
-		gomcp.WithDescription("List memories with optional filters"),
-		gomcp.WithString("type", gomcp.Description("Filter by memory type")),
+		gomcp.WithDescription("List recent memories chronologically. Use to review what was stored recently or browse by type."),
+		gomcp.WithString("type", gomcp.Description("Filter by type: feedback, til, summary, knowledge")),
 		gomcp.WithNumber("limit", gomcp.Description("Max results (default 10)")),
-		gomcp.WithString("since", gomcp.Description("Show memories since (Nd format, e.g. 7d)")),
+		gomcp.WithString("since", gomcp.Description("Time range in Nd format, e.g. 7d for last 7 days")),
 	), s.handleList)
 
 	srv.AddTool(gomcp.NewTool("memory_delete",
-		gomcp.WithDescription("Delete a memory by ID"),
+		gomcp.WithDescription("Delete a memory by ID. Use to remove outdated or incorrect memories."),
 		gomcp.WithNumber("id", gomcp.Required(), gomcp.Description("Memory ID to delete")),
 	), s.handleDelete)
+
+	srv.AddTool(gomcp.NewTool("memory_context",
+		gomcp.WithDescription("Get a bounded summary of recent memories as context. Use at the START of a session or when switching to a different project to load relevant background knowledge. Returns a concise markdown digest — cheaper than searching multiple times."),
+		gomcp.WithString("type", gomcp.Description("Filter by type: feedback, til, summary, knowledge")),
+		gomcp.WithString("project", gomcp.Description("Filter to a specific project")),
+		gomcp.WithNumber("limit", gomcp.Description("Max memories to include (default 20)")),
+	), s.handleContext)
 
 	return srv
 }

@@ -248,6 +248,91 @@ func (d *DB) Stats() (*Stats, error) {
 	return s, nil
 }
 
+// ContextOptions 摘要查詢參數。
+type ContextOptions struct {
+	Type    string
+	Project string
+	Limit   int
+}
+
+// Context 產生 bounded 的記憶摘要，依 type 分組，最近的優先。
+func (d *DB) Context(opts ContextOptions) (string, error) {
+	query := `SELECT id, type, content, tags, project, created, updated FROM memories`
+	var args []any
+	var where []string
+	if opts.Type != "" {
+		where = append(where, "type = ?")
+		args = append(args, opts.Type)
+	}
+	if opts.Project != "" {
+		where = append(where, "project = ?")
+		args = append(args, opts.Project)
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += ` ORDER BY created DESC, id DESC`
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	query += ` LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return "", fmt.Errorf("context: %w", err)
+	}
+	defer rows.Close()
+
+	grouped := make(map[string][]string)
+	typeOrder := []string{}
+	seen := make(map[string]bool)
+
+	for rows.Next() {
+		var m Memory
+		var created, updated string
+		if err := rows.Scan(&m.ID, &m.Type, &m.Content, &m.Tags, &m.Project, &created, &updated); err != nil {
+			return "", fmt.Errorf("context scan: %w", err)
+		}
+		m.Created, _ = time.Parse(timeLayout, created)
+		line := fmt.Sprintf("- #%d %s", m.ID, m.Content)
+		if m.Tags != "" {
+			line += fmt.Sprintf(" [%s]", m.Tags)
+		}
+		grouped[m.Type] = append(grouped[m.Type], line)
+		if !seen[m.Type] {
+			typeOrder = append(typeOrder, m.Type)
+			seen[m.Type] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	if len(grouped) == 0 {
+		return "No memories stored yet.", nil
+	}
+
+	total := 0
+	for _, items := range grouped {
+		total += len(items)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Memories (%d entries)\n\n", total)
+	for _, typ := range typeOrder {
+		items := grouped[typ]
+		fmt.Fprintf(&b, "### %s (%d)\n", typ, len(items))
+		for _, item := range items {
+			b.WriteString(item)
+			b.WriteByte('\n')
+		}
+		b.WriteByte('\n')
+	}
+	return b.String(), nil
+}
+
 // ExportAll 匯出所有記憶。
 func (d *DB) ExportAll() ([]Memory, error) {
 	return d.List(ListOptions{})
