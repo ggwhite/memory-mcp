@@ -85,7 +85,10 @@ func Open(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
-	sqlDB, err := sql.Open("sqlite", path)
+	// WAL 允許併發讀 + 單一寫（寫不擋讀），busy_timeout 讓多個 session 的
+	// serve process 遇到寫鎖時等待而非立即回報 readonly/busy。
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", path)
+	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
