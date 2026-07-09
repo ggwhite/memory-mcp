@@ -86,6 +86,8 @@ func init() {
 	contextCmd.Flags().String("project", "", "filter to a specific project")
 	contextCmd.Flags().IntP("limit", "n", 20, "max memories to include")
 
+	serveCmd.Flags().String("http", "", "listen on this addr as an HTTP MCP server (e.g. 127.0.0.1:8766); empty = stdio")
+
 	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd)
 }
 
@@ -287,7 +289,7 @@ var exportCmd = &cobra.Command{
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start stdio MCP server",
+	Short: "Start MCP server (stdio by default, or HTTP with --http)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		d, err := openDB()
 		if err != nil {
@@ -296,6 +298,12 @@ var serveCmd = &cobra.Command{
 		defer d.Close()
 
 		srv := memcp.NewServer(d).MCPServer()
+
+		// --http 啟 StreamableHTTP 單一 server，各 session 連同一個 URL
+		// （對齊 docs-rag），避免每個 session fork 一支 stdio server。
+		if addr, _ := cmd.Flags().GetString("http"); addr != "" {
+			return mcpserver.NewStreamableHTTPServer(srv).Start(addr)
+		}
 		return mcpserver.ServeStdio(srv)
 	},
 }
