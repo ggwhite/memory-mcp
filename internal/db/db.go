@@ -38,6 +38,23 @@ type Stats struct {
 	Latest   string         `json:"latest"`
 }
 
+// Store 記憶儲存後端的操作介面，*DB（本機 SQLite）與 httpapi.Client
+// （透過 HTTP 轉發到遠端 memory-mcp）都實作此介面，讓 CLI／MCP server
+// 可以不分本機或遠端統一呼叫。
+type Store interface {
+	Store(mem *Memory) (int64, error)
+	Get(id int64) (*Memory, error)
+	Update(id int64, content string) error
+	Delete(id int64) error
+	List(opts ListOptions) ([]Memory, error)
+	Search(opts SearchOptions) ([]SearchResult, error)
+	Stats() (*Stats, error)
+	Context(opts ContextOptions) (string, error)
+	ExportAll() ([]Memory, error)
+	ImportBatch(memories []Memory) (int, error)
+	Close() error
+}
+
 // DB SQLite 資料庫連線。
 type DB struct {
 	db *sql.DB

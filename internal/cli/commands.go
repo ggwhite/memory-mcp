@@ -3,12 +3,14 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"memory-mcp/internal/db"
+	"memory-mcp/internal/httpapi"
 	memcp "memory-mcp/internal/mcp"
 
 	"github.com/spf13/cobra"
@@ -16,8 +18,9 @@ import (
 )
 
 var (
-	dbPath   string
-	jsonFlag bool
+	dbPath     string
+	jsonFlag   bool
+	remoteFlag string
 )
 
 func defaultDBPath() string {
@@ -34,6 +37,19 @@ func openDB() (*db.DB, error) {
 		path = defaultDBPath()
 	}
 	return db.Open(path)
+}
+
+// openStore 依 --remote / MEMORY_MCP_REMOTE 決定要操作本機 SQLite
+// 還是透過 HTTP 轉發到遠端 memory-mcp（例如 SSH tunnel 過去的另一台機器）。
+func openStore() (db.Store, error) {
+	remote := remoteFlag
+	if remote == "" {
+		remote = os.Getenv("MEMORY_MCP_REMOTE")
+	}
+	if remote != "" {
+		return httpapi.NewClient(remote), nil
+	}
+	return openDB()
 }
 
 func printJSON(v any) error {
@@ -67,6 +83,7 @@ func Execute() error {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", "", "database path (default ~/.local/share/memory-mcp/memory.db)")
 	rootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "output JSON format")
+	rootCmd.PersistentFlags().StringVar(&remoteFlag, "remote", "", "remote memory-mcp REST API URL (e.g. http://127.0.0.1:8766); overrides --db. Also settable via MEMORY_MCP_REMOTE env var")
 
 	storeCmd.Flags().StringP("type", "t", "", "memory type (feedback|til|summary|knowledge)")
 	storeCmd.MarkFlagRequired("type")
@@ -87,6 +104,7 @@ func init() {
 	contextCmd.Flags().IntP("limit", "n", 20, "max memories to include")
 
 	serveCmd.Flags().String("http", "", "listen on this addr as an HTTP MCP server (e.g. 127.0.0.1:8766); empty = stdio")
+	serveCmd.Flags().String("http-api", "", "listen on this addr as a REST JSON API server (always local DB, for --remote clients to connect to)")
 
 	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd)
 }
@@ -100,7 +118,7 @@ var storeCmd = &cobra.Command{
 		tags, _ := cmd.Flags().GetString("tags")
 		project, _ := cmd.Flags().GetString("project")
 
-		d, err := openDB()
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
@@ -128,7 +146,7 @@ var searchCmd = &cobra.Command{
 		typ, _ := cmd.Flags().GetString("type")
 		limit, _ := cmd.Flags().GetInt("limit")
 
-		d, err := openDB()
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
@@ -161,7 +179,7 @@ var listCmd = &cobra.Command{
 		limit, _ := cmd.Flags().GetInt("limit")
 		since, _ := cmd.Flags().GetString("since")
 
-		d, err := openDB()
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
@@ -196,7 +214,7 @@ var deleteCmd = &cobra.Command{
 			return fmt.Errorf("invalid id: %w", err)
 		}
 
-		d, err := openDB()
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
@@ -223,7 +241,7 @@ var updateCmd = &cobra.Command{
 			return fmt.Errorf("invalid id: %w", err)
 		}
 
-		d, err := openDB()
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
@@ -244,7 +262,7 @@ var statsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Show memory statistics",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		d, err := openDB()
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
@@ -273,7 +291,7 @@ var exportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "Export all memories as JSON",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		d, err := openDB()
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
@@ -291,7 +309,18 @@ var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start MCP server (stdio by default, or HTTP with --http)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		d, err := openDB()
+		// --http-api 是給其他機器用 --remote 連過來的中央伺服器模式，
+		// 一定操作本機 DB，不會再往外轉發。
+		if apiAddr, _ := cmd.Flags().GetString("http-api"); apiAddr != "" {
+			d, err := openDB()
+			if err != nil {
+				return err
+			}
+			defer d.Close()
+			return http.ListenAndServe(apiAddr, httpapi.NewServer(d).Handler())
+		}
+
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
@@ -316,7 +345,7 @@ var contextCmd = &cobra.Command{
 		project, _ := cmd.Flags().GetString("project")
 		limit, _ := cmd.Flags().GetInt("limit")
 
-		d, err := openDB()
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
@@ -350,7 +379,7 @@ var importCmd = &cobra.Command{
 			return fmt.Errorf("parse JSON: %w", err)
 		}
 
-		d, err := openDB()
+		d, err := openStore()
 		if err != nil {
 			return err
 		}
