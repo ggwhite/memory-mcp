@@ -13,11 +13,12 @@ import (
 
 // Server MCP server，封裝 DB 操作為 MCP tools。
 type Server struct {
-	db *db.DB
+	db db.Store
 }
 
-// NewServer 建立 MCP server。
-func NewServer(d *db.DB) *Server {
+// NewServer 建立 MCP server。d 可以是本機 *db.DB 或 httpapi.Client
+// 等其他 db.Store 實作（例如 --remote 轉發到中央機器）。
+func NewServer(d db.Store) *Server {
 	return &Server{db: d}
 }
 
