@@ -86,6 +86,24 @@ Default: `~/.local/share/memory-mcp/memory.db`
 
 Override: `--db` flag or `MEMORY_MCP_DB` env var.
 
+## Semantic Search
+
+`search` 自動混合 FTS5 關鍵字搜尋與本機 Ollama 產生的語意向量搜尋（Reciprocal Rank Fusion）。Ollama 不在線時自動降級為純 FTS5，不影響既有使用方式。
+
+```bash
+# 需要本機跑著 Ollama 並已拉下 embedding 模型（預設 nomic-embed-text）
+ollama pull nomic-embed-text
+
+# 補算既有資料、或 Ollama 曾離線期間漏算的 embedding；可重複執行
+memory-mcp reindex
+```
+
+環境變數（皆有預設值）：
+- `MEMORY_MCP_OLLAMA_URL`（預設 `http://localhost:11434`）
+- `MEMORY_MCP_EMBED_MODEL`（預設 `nomic-embed-text`）
+
+跨機器同步（`--remote`）不需要裝 Ollama：語意運算全部發生在中央機器（跑實體 DB 那台）。
+
 ## Search
 
 Uses SQLite FTS5 with trigram tokenizer. Supports any language including CJK. Queries need at least 3 characters.

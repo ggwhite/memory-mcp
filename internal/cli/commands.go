@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"memory-mcp/internal/db"
+	"memory-mcp/internal/embed"
 	"memory-mcp/internal/httpapi"
 	memcp "memory-mcp/internal/mcp"
 
@@ -36,7 +38,12 @@ func openDB() (*db.DB, error) {
 	if path == "" {
 		path = defaultDBPath()
 	}
-	return db.Open(path)
+	d, err := db.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	d.SetEmbedder(embed.NewOllamaEmbedderFromEnv())
+	return d, nil
 }
 
 // openStore 依 --remote / MEMORY_MCP_REMOTE 決定要操作本機 SQLite
@@ -106,7 +113,7 @@ func init() {
 	serveCmd.Flags().String("http", "", "listen on this addr as an HTTP MCP server (e.g. 127.0.0.1:8766); empty = stdio")
 	serveCmd.Flags().String("http-api", "", "listen on this addr as a REST JSON API server (always local DB, for --remote clients to connect to)")
 
-	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd)
+	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd, reindexCmd)
 }
 
 var storeCmd = &cobra.Command{
@@ -360,6 +367,32 @@ var contextCmd = &cobra.Command{
 			return err
 		}
 		fmt.Print(summary)
+		return nil
+	},
+}
+
+var reindexCmd = &cobra.Command{
+	Use:   "reindex",
+	Short: "Backfill or refresh semantic search embeddings for stored memories",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if remoteFlag != "" || os.Getenv("MEMORY_MCP_REMOTE") != "" {
+			return fmt.Errorf("reindex only operates on the local database, not --remote")
+		}
+
+		d, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer d.Close()
+
+		stats, err := d.Reindex(context.Background())
+		if err != nil {
+			return err
+		}
+		if jsonFlag {
+			return printJSON(stats)
+		}
+		fmt.Printf("Reindexed %d/%d memories (%d failed)\n", stats.Processed, stats.Total, stats.Failed)
 		return nil
 	},
 }
