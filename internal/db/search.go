@@ -24,6 +24,18 @@ type SearchResult struct {
 // rrfK 是 Reciprocal Rank Fusion 的平滑常數，業界慣用值。
 const rrfK = 60
 
+// ftsCandidatePoolMultiplier、ftsCandidatePoolMin 用來擴大「進入融合前」的
+// FTS5 候選池大小。vectorRank 對向量端本來就是全量掃描、不做截斷，若 FTS5
+// 端只給 opts.Limit（預設 5）筆候選，會讓排名恰好落在 limit 之外、但其實
+// 也命中關鍵字的強語意結果在 RRF 融合時完全拿不到 FTS5 名次分數，等於白
+// 白浪費了雙路排序融合的意義。這裡把 FTS5 候選池放大到與向量端相當的深
+// 度，讓兩邊在融合時有可比較的候選規模；最終輸出仍會在融合「之後」依
+// opts.Limit 截斷（見 Search 內 fused 的截斷邏輯，不受此常數影響）。
+const (
+	ftsCandidatePoolMultiplier = 4
+	ftsCandidatePoolMin        = 20
+)
+
 // Search 混合 FTS5 全文搜索與語意向量搜索（embedder 已設定時），用
 // Reciprocal Rank Fusion 合併排序；embedder 未設定或呼叫失敗時自動降級為
 // 純 FTS5 結果。
@@ -53,8 +65,19 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 		return ftsResults, nil
 	}
 
-	ftsIDs := make([]int64, len(ftsResults))
-	for i, r := range ftsResults {
+	// 融合用的 FTS5 候選池比最終輸出的 limit 寬，好讓 FTS5 排名跟向量排名有
+	// 相當深度可以融合；真正回傳給呼叫端的筆數仍由下面的截斷邏輯決定。
+	ftsCandidateLimit := limit * ftsCandidatePoolMultiplier
+	if ftsCandidateLimit < ftsCandidatePoolMin {
+		ftsCandidateLimit = ftsCandidatePoolMin
+	}
+	ftsCandidates, err := d.ftsSearch(opts, ftsCandidateLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	ftsIDs := make([]int64, len(ftsCandidates))
+	for i, r := range ftsCandidates {
 		ftsIDs[i] = r.ID
 	}
 
@@ -62,7 +85,7 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 	if len(fused) > limit {
 		fused = fused[:limit]
 	}
-	return d.hydrateResults(fused, ftsResults)
+	return d.hydrateResults(fused, ftsCandidates)
 }
 
 // ftsSearch 使用 FTS5 全文搜索記憶，依相關度排序。
