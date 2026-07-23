@@ -81,6 +81,11 @@ func TestUpdateRefreshesEmbedding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// 換成回傳不同維度向量的 embedder，藉此證明 Update 真的有重新呼叫
+	// tryEmbed，而不是 Store 當時寫入的舊 row 還留在原地沒被覆寫。
+	d.SetEmbedder(&fakeEmbedder{vec: []float32{0.1, 0.2}, model: "fake2"})
+
 	if err := d.Update(id, "v2"); err != nil {
 		t.Fatal(err)
 	}
@@ -89,8 +94,8 @@ func TestUpdateRefreshesEmbedding(t *testing.T) {
 	if err := d.db.QueryRow(`SELECT vector FROM memory_embeddings WHERE memory_id = ?`, id).Scan(&blob); err != nil {
 		t.Fatal(err)
 	}
-	if len(blob) != 4 { // 1 個 float32 = 4 bytes
-		t.Fatalf("len(blob) = %d, want 4", len(blob))
+	if len(blob) != 8 { // 2 個 float32 = 8 bytes；若仍是 4 代表 Update 沒有重新嵌入
+		t.Fatalf("len(blob) = %d, want 8", len(blob))
 	}
 }
 

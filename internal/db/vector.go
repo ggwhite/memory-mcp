@@ -25,7 +25,12 @@ func decodeVector(b []byte) []float32 {
 }
 
 // cosineSimilarity 計算兩個向量的餘弦相似度；任一向量為零向量時回傳 0。
+// 若兩向量長度不同（例如換嵌入模型後、reindex 尚未完成時新舊維度的向量
+// 同時存在），視為不相似並回傳 0，而非索引越界 panic。
 func cosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) {
+		return 0
+	}
 	var dot, na, nb float64
 	for i := range a {
 		dot += float64(a[i]) * float64(b[i])

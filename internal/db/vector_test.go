@@ -47,6 +47,25 @@ func TestCosineSimilarityZeroVector(t *testing.T) {
 	}
 }
 
+func TestCosineSimilarityLengthMismatch(t *testing.T) {
+	a := []float32{1, 2}
+	b := []float32{1, 2, 3}
+	if got := cosineSimilarity(a, b); got != 0 {
+		t.Fatalf("cosineSimilarity(length mismatch) = %f, want 0", got)
+	}
+}
+
+func TestEncodeDecodeVectorEmpty(t *testing.T) {
+	blob := encodeVector(nil)
+	if len(blob) != 0 {
+		t.Fatalf("len(blob) = %d, want 0", len(blob))
+	}
+	got := decodeVector(blob)
+	if len(got) != 0 {
+		t.Fatalf("len(got) = %d, want 0", len(got))
+	}
+}
+
 func TestReciprocalRankFusionOverlap(t *testing.T) {
 	// id 1 在兩個排名都名列前茅，融合後應該排第一。
 	a := []int64{1, 2, 3}
