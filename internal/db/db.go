@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"memory-mcp/internal/embed"
 
 	_ "modernc.org/sqlite"
 )
@@ -57,7 +60,8 @@ type Store interface {
 
 // DB SQLite 資料庫連線。
 type DB struct {
-	db *sql.DB
+	db       *sql.DB
+	embedder embed.Embedder
 }
 
 const schema = `
@@ -93,6 +97,13 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
     INSERT INTO memories_fts(rowid, content, tags, project)
     VALUES (new.id, new.content, new.tags, new.project);
 END;
+
+CREATE TABLE IF NOT EXISTS memory_embeddings (
+    memory_id INTEGER PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+    vector    BLOB NOT NULL,
+    model     TEXT NOT NULL,
+    created   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now'))
+);
 `
 
 const timeLayout = "2006-01-02T15:04:05"
@@ -104,7 +115,7 @@ func Open(path string) (*DB, error) {
 	}
 	// WAL 允許併發讀 + 單一寫（寫不擋讀），busy_timeout 讓多個 session 的
 	// serve process 遇到寫鎖時等待而非立即回報 readonly/busy。
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", path)
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -121,6 +132,43 @@ func (d *DB) Close() error {
 	return d.db.Close()
 }
 
+// SetEmbedder 設定用於語意搜尋的 embedder；不設定（nil）則只使用 FTS5。
+func (d *DB) SetEmbedder(e embed.Embedder) {
+	d.embedder = e
+}
+
+// tryEmbed 嘗試計算並儲存一筆記憶的語意向量。embedder 未設定、呼叫逾時，或
+// 寫入失敗都視為可忽略的降級情況（純 FTS5 仍可正常使用），只印警告、不回傳
+// 錯誤給呼叫端。
+func (d *DB) tryEmbed(id int64, content string) {
+	if d.embedder == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	vec, err := d.embedder.Embed(ctx, content)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory-mcp: embed skipped for #%d: %v\n", id, err)
+		return
+	}
+
+	if err := d.upsertEmbedding(id, vec, d.embedder.Model()); err != nil {
+		fmt.Fprintf(os.Stderr, "memory-mcp: embed store failed for #%d: %v\n", id, err)
+	}
+}
+
+// upsertEmbedding 寫入或覆蓋一筆記憶的向量；Task 5 的 Reindex 會重用這個方法。
+func (d *DB) upsertEmbedding(memoryID int64, vec []float32, model string) error {
+	_, err := d.db.Exec(
+		`INSERT INTO memory_embeddings (memory_id, vector, model) VALUES (?, ?, ?)
+		 ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, model = excluded.model,
+		     created = strftime('%Y-%m-%dT%H:%M:%S','now')`,
+		memoryID, encodeVector(vec), model,
+	)
+	return err
+}
+
 // Store 儲存一筆記憶，回傳 auto-increment ID。
 func (d *DB) Store(mem *Memory) (int64, error) {
 	res, err := d.db.Exec(
@@ -130,7 +178,12 @@ func (d *DB) Store(mem *Memory) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("store: %w", err)
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("store: %w", err)
+	}
+	d.tryEmbed(id, mem.Content)
+	return id, nil
 }
 
 // Get 依 ID 取得一筆記憶。
@@ -161,6 +214,7 @@ func (d *DB) Update(id int64, content string) error {
 	if n == 0 {
 		return fmt.Errorf("update: memory %d not found", id)
 	}
+	d.tryEmbed(id, content)
 	return nil
 }
 
