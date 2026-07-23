@@ -461,7 +461,7 @@ git commit -m "feat: add vector encoding, cosine similarity, and RRF fusion help
 
 **Interfaces:**
 - Consumes: `embed.Embedder`（Task 1）、`encodeVector`（Task 2）
-- Produces: `func (d *DB) SetEmbedder(e embed.Embedder)`、`memory_embeddings` 表（`memory_id`, `vector`, `model`, `created`）；`fakeEmbedder` test double（供 Task 4/5 測試重用）
+- Produces: `func (d *DB) SetEmbedder(e embed.Embedder)`、`func (d *DB) upsertEmbedding(memoryID int64, vec []float32, model string) error`、`memory_embeddings` 表（`memory_id`, `vector`, `model`, `created`）；`fakeEmbedder` test double（供 Task 4/5 測試重用）
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -665,15 +665,20 @@ func (d *DB) tryEmbed(id int64, content string) {
 		return
 	}
 
-	_, err = d.db.Exec(
+	if err := d.upsertEmbedding(id, vec, d.embedder.Model()); err != nil {
+		fmt.Fprintf(os.Stderr, "memory-mcp: embed store failed for #%d: %v\n", id, err)
+	}
+}
+
+// upsertEmbedding 寫入或覆蓋一筆記憶的向量；Task 5 的 Reindex 會重用這個方法。
+func (d *DB) upsertEmbedding(memoryID int64, vec []float32, model string) error {
+	_, err := d.db.Exec(
 		`INSERT INTO memory_embeddings (memory_id, vector, model) VALUES (?, ?, ?)
 		 ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, model = excluded.model,
 		     created = strftime('%Y-%m-%dT%H:%M:%S','now')`,
-		id, encodeVector(vec), d.embedder.Model(),
+		memoryID, encodeVector(vec), model,
 	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "memory-mcp: embed store failed for #%d: %v\n", id, err)
-	}
+	return err
 }
 ```
 
@@ -1052,7 +1057,7 @@ git commit -m "feat: hybrid FTS5 + semantic vector search with RRF fusion"
 - Create: `internal/db/reindex_test.go`
 
 **Interfaces:**
-- Consumes: `d.embedder embed.Embedder`（Task 3）、`encodeVector`（Task 2）、`fakeEmbedder`（Task 3）
+- Consumes: `d.embedder embed.Embedder`（Task 3）、`d.upsertEmbedding(memoryID int64, vec []float32, model string) error`（Task 3）、`fakeEmbedder`（Task 3）
 - Produces: `type ReindexStats struct { Total, Processed, Failed int }`、`func (d *DB) Reindex(ctx context.Context) (ReindexStats, error)`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1209,13 +1214,7 @@ func (d *DB) Reindex(ctx context.Context) (ReindexStats, error) {
 			stats.Failed++
 			continue
 		}
-		_, err = d.db.Exec(
-			`INSERT INTO memory_embeddings (memory_id, vector, model) VALUES (?, ?, ?)
-			 ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, model = excluded.model,
-			     created = strftime('%Y-%m-%dT%H:%M:%S','now')`,
-			p.id, encodeVector(vec), d.embedder.Model(),
-		)
-		if err != nil {
+		if err := d.upsertEmbedding(p.id, vec, d.embedder.Model()); err != nil {
 			stats.Failed++
 			continue
 		}
@@ -1224,6 +1223,8 @@ func (d *DB) Reindex(ctx context.Context) (ReindexStats, error) {
 	return stats, nil
 }
 ```
+
+`upsertEmbedding` 是 Task 3 在 `internal/db/db.go` 新增的方法（見 Task 3 Step 3 第 5 點），這裡直接重用，不重寫 SQL。
 
 - [ ] **Step 4: Run tests to verify they pass**
 
