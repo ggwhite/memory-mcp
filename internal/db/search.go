@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -12,14 +14,59 @@ type SearchOptions struct {
 	Limit int // default 5
 }
 
-// SearchResult 搜索結果，包含 FTS5 排名分數。
+// SearchResult 搜索結果，包含 FTS5 排名分數。混合搜尋（embedder 已設定）開
+// 啟時，Rank 只在該筆同時是 FTS5 命中時有意義；純語意命中的筆數 Rank 為 0。
 type SearchResult struct {
 	Memory
 	Rank float64 `json:"rank"`
 }
 
-// Search 使用 FTS5 全文搜索記憶，依相關度排序。
+// rrfK 是 Reciprocal Rank Fusion 的平滑常數，業界慣用值。
+const rrfK = 60
+
+// Search 混合 FTS5 全文搜索與語意向量搜索（embedder 已設定時），用
+// Reciprocal Rank Fusion 合併排序；embedder 未設定或呼叫失敗時自動降級為
+// 純 FTS5 結果。
 func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+
+	ftsResults, err := d.ftsSearch(opts, limit)
+	if err != nil {
+		return nil, err
+	}
+	if d.embedder == nil {
+		return ftsResults, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	queryVec, err := d.embedder.Embed(ctx, opts.Query)
+	if err != nil {
+		return ftsResults, nil
+	}
+
+	vectorIDs, err := d.vectorRank(queryVec, opts.Type)
+	if err != nil || len(vectorIDs) == 0 {
+		return ftsResults, nil
+	}
+
+	ftsIDs := make([]int64, len(ftsResults))
+	for i, r := range ftsResults {
+		ftsIDs[i] = r.ID
+	}
+
+	fused := reciprocalRankFusion(ftsIDs, vectorIDs, rrfK)
+	if len(fused) > limit {
+		fused = fused[:limit]
+	}
+	return d.hydrateResults(fused, ftsResults)
+}
+
+// ftsSearch 使用 FTS5 全文搜索記憶，依相關度排序。
+func (d *DB) ftsSearch(opts SearchOptions, limit int) ([]SearchResult, error) {
 	query := `
 		SELECT m.id, m.type, m.content, m.tags, m.project, m.created, m.updated, f.rank
 		FROM memories_fts f
@@ -32,13 +79,7 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 		args = append(args, opts.Type)
 	}
 
-	query += ` ORDER BY f.rank`
-
-	limit := opts.Limit
-	if limit <= 0 {
-		limit = 5
-	}
-	query += ` LIMIT ?`
+	query += ` ORDER BY f.rank LIMIT ?`
 	args = append(args, limit)
 
 	rows, err := d.db.Query(query, args...)
@@ -59,4 +100,72 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// vectorRank 計算 queryVec 與所有（依 type 篩選後）記憶向量的 cosine
+// similarity，回傳依相似度由高到低排序的記憶 ID 清單。目前記憶量規模
+// （~220 筆）brute-force 全量計算即可，不做提前截斷。
+func (d *DB) vectorRank(queryVec []float32, typ string) ([]int64, error) {
+	query := `SELECT e.memory_id, e.vector FROM memory_embeddings e`
+	var args []any
+	if typ != "" {
+		query += ` JOIN memories m ON m.id = e.memory_id WHERE m.type = ?`
+		args = append(args, typ)
+	}
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("vector rank: %w", err)
+	}
+	defer rows.Close()
+
+	type scored struct {
+		id    int64
+		score float64
+	}
+	var scoredList []scored
+	for rows.Next() {
+		var id int64
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			return nil, fmt.Errorf("vector rank scan: %w", err)
+		}
+		scoredList = append(scoredList, scored{id: id, score: cosineSimilarity(queryVec, decodeVector(blob))})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(scoredList, func(i, j int) bool {
+		return scoredList[i].score > scoredList[j].score
+	})
+
+	ids := make([]int64, len(scoredList))
+	for i, s := range scoredList {
+		ids[i] = s.id
+	}
+	return ids, nil
+}
+
+// hydrateResults 依 fusedIDs 順序組出最終結果，優先重用 ftsResults 裡已經
+// 查過的資料，純語意命中（不在 ftsResults 裡）的才額外查一次。
+func (d *DB) hydrateResults(fusedIDs []int64, ftsResults []SearchResult) ([]SearchResult, error) {
+	byID := make(map[int64]SearchResult, len(ftsResults))
+	for _, r := range ftsResults {
+		byID[r.ID] = r
+	}
+
+	out := make([]SearchResult, 0, len(fusedIDs))
+	for _, id := range fusedIDs {
+		if r, ok := byID[id]; ok {
+			out = append(out, r)
+			continue
+		}
+		m, err := d.Get(id)
+		if err != nil {
+			continue // 記憶可能剛好被刪除，略過
+		}
+		out = append(out, SearchResult{Memory: *m})
+	}
+	return out, nil
 }
