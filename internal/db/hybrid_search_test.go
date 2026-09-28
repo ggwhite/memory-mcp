@@ -56,7 +56,7 @@ func TestSearchSurfacesSemanticOnlyMatch(t *testing.T) {
 		vectors: map[string][]float32{
 			"how do I fix flaky CI":               {1, 0},
 			"retry logic solved the CI flakiness": {1, 0}, // 語意相關，關鍵字不重疊
-			"unrelated memory about cooking":       {0, 1},
+			"unrelated memory about cooking":      {0, 1},
 		},
 	}
 	d.SetEmbedder(embedder)

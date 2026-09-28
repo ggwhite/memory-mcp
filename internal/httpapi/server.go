@@ -48,7 +48,7 @@ func (s *Server) Handler() http.Handler {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]int64{"id": id})
+		writeJSON(w, http.StatusOK, map[string]int64{"id": id, "redacted": int64(mem.Redacted)})
 	})
 
 	mux.HandleFunc("GET /v1/memories/{id}", func(w http.ResponseWriter, r *http.Request) {

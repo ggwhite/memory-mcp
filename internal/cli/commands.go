@@ -15,8 +15,8 @@ import (
 	"memory-mcp/internal/httpapi"
 	memcp "memory-mcp/internal/mcp"
 
-	"github.com/spf13/cobra"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -131,14 +131,16 @@ var storeCmd = &cobra.Command{
 		}
 		defer d.Close()
 
-		id, err := d.Store(&db.Memory{
-			Type: typ, Content: args[0], Tags: tags, Project: project,
-		})
+		mem := &db.Memory{Type: typ, Content: args[0], Tags: tags, Project: project}
+		id, err := d.Store(mem)
 		if err != nil {
 			return err
 		}
+		if mem.Redacted > 0 {
+			fmt.Fprintf(os.Stderr, "已遮蔽 %d 處敏感內容\n", mem.Redacted)
+		}
 		if jsonFlag {
-			return printJSON(map[string]any{"id": id})
+			return printJSON(map[string]any{"id": id, "redacted": mem.Redacted})
 		}
 		fmt.Printf("Stored memory #%d\n", id)
 		return nil

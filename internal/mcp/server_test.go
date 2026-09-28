@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"memory-mcp/internal/db"
@@ -94,5 +95,20 @@ func TestMCPDelete(t *testing.T) {
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %v", result.Content)
+	}
+}
+
+func TestMCPStoreReportsRedacted(t *testing.T) {
+	s := NewServer(testDB(t))
+	result := callTool(t, s, "memory_store", map[string]any{
+		"type":    "til",
+		"content": "password=abcdef123",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %v", result.Content)
+	}
+	text := result.Content[0].(gomcp.TextContent).Text
+	if !strings.Contains(text, `"redacted":1`) {
+		t.Errorf("result = %s, want redacted count", text)
 	}
 }

@@ -17,13 +17,14 @@ import (
 
 // Memory 一筆持久記憶。
 type Memory struct {
-	ID      int64     `json:"id"`
-	Type    string    `json:"type"`
-	Content string    `json:"content"`
-	Tags    string    `json:"tags"`
-	Project string    `json:"project"`
-	Created time.Time `json:"created"`
-	Updated time.Time `json:"updated"`
+	ID       int64     `json:"id"`
+	Type     string    `json:"type"`
+	Content  string    `json:"content"`
+	Tags     string    `json:"tags"`
+	Project  string    `json:"project"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
+	Redacted int       `json:"redacted,omitempty"`
 }
 
 // ListOptions 列表查詢參數。
@@ -169,8 +170,14 @@ func (d *DB) upsertEmbedding(memoryID int64, vec []float32, model string) error 
 	return err
 }
 
-// Store 儲存一筆記憶，回傳 auto-increment ID。
+// Store 儲存一筆記憶（寫入前先 Sanitize，mem.Content／mem.Redacted 會被回寫），回傳 auto-increment ID。
 func (d *DB) Store(mem *Memory) (int64, error) {
+	clean, n := Sanitize(mem.Content)
+	if clean == "" {
+		return 0, ErrEmptyAfterSanitize
+	}
+	mem.Content = clean
+	mem.Redacted = n
 	res, err := d.db.Exec(
 		`INSERT INTO memories (type, content, tags, project) VALUES (?, ?, ?, ?)`,
 		mem.Type, mem.Content, mem.Tags, mem.Project,
@@ -201,8 +208,12 @@ func (d *DB) Get(id int64) (*Memory, error) {
 	return &m, nil
 }
 
-// Update 更新指定記憶的內容。
+// Update 更新指定記憶的內容（寫入前先 Sanitize）。
 func (d *DB) Update(id int64, content string) error {
+	content, _ = Sanitize(content)
+	if content == "" {
+		return ErrEmptyAfterSanitize
+	}
 	res, err := d.db.Exec(
 		`UPDATE memories SET content = ?, updated = strftime('%Y-%m-%dT%H:%M:%S','now') WHERE id = ?`,
 		content, id,
