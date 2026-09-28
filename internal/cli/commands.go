@@ -439,6 +439,10 @@ func runSummarizeHook() {
 	if os.Getenv(hook.SummarizingEnv) == "1" {
 		return
 	}
+	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		summarizeLogf("- - hook: stdin is a terminal")
+		return
+	}
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil || len(data) == 0 {
 		summarizeLogf("- - hook: empty stdin")

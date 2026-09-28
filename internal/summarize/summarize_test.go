@@ -139,6 +139,16 @@ func TestRunSkipOutput(t *testing.T) {
 	}
 }
 
+func TestRunSkipPrefixOutput(t *testing.T) {
+	in, d := setup(t, fixture)
+	called := 0
+	Run(context.Background(), in, deps(d, "SKIP.\n閒聊", &called))
+	ms, _ := d.List(db.ListOptions{Type: "summary"})
+	if len(ms) != 0 {
+		t.Error("SKIP-prefixed output should not be stored")
+	}
+}
+
 func TestBuildPrompt(t *testing.T) {
 	p := BuildPrompt("kairos", time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC), "[user] hi")
 	for _, s := range []string{"project: kairos", "2026-09-28", "繁體中文", "SKIP", "<transcript>\n[user] hi\n</transcript>"} {

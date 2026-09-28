@@ -92,7 +92,7 @@ func Run(ctx context.Context, in hook.Input, deps Deps) error {
 		return err
 	}
 	out = strings.TrimSpace(out)
-	if out == "" || out == skipToken {
+	if out == "" || strings.HasPrefix(out, skipToken) {
 		logf("skip: model returned %q", out)
 		return nil
 	}
@@ -108,7 +108,7 @@ func Run(ctx context.Context, in hook.Input, deps Deps) error {
 
 // ClaudeRunner 以 claude -p（haiku、不保存 session）產生摘要，並設定防遞迴環境變數。
 func ClaudeRunner(ctx context.Context, prompt string) (string, error) {
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", "haiku", "--no-session-persistence")
+	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", "haiku", "--no-session-persistence", "--tools", "", "--strict-mcp-config")
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = append(os.Environ(), hook.SummarizingEnv+"=1")
 	out, err := cmd.Output()
