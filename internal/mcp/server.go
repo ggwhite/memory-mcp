@@ -170,6 +170,7 @@ func (s *Server) handleContext(_ context.Context, req gomcp.CallToolRequest) (*g
 		Type:    req.GetString("type", ""),
 		Project: req.GetString("project", ""),
 		Limit:   limit,
+		Full:    req.GetBool("full", false),
 	})
 	if err != nil {
 		return errResult(err), nil
@@ -225,10 +226,11 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	), s.handleDelete)
 
 	srv.AddTool(gomcp.NewTool("memory_context",
-		gomcp.WithDescription("Get a bounded summary of recent memories as context. Use at the START of a session or when switching to a different project to load relevant background knowledge. Returns a concise markdown digest — cheaper than searching multiple times."),
+		gomcp.WithDescription("Get an index of recent memories (one line each, 120-char snippet). With project and no type: global feedback + that project's latest summaries + other memories. Use at the START of a session or when switching projects; then call memory_get for full content."),
 		gomcp.WithString("type", gomcp.Description("Filter by type: feedback, til, summary, knowledge")),
-		gomcp.WithString("project", gomcp.Description("Filter to a specific project")),
-		gomcp.WithNumber("limit", gomcp.Description("Max memories to include (default 20)")),
+		gomcp.WithString("project", gomcp.Description("Project name (lowercase basename of the working directory)")),
+		gomcp.WithNumber("limit", gomcp.Description("Max memories when not in project mode (default 20)")),
+		gomcp.WithBoolean("full", gomcp.Description("true = full content grouped by type (legacy format)")),
 	), s.handleContext)
 
 	return srv

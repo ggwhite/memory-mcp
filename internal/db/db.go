@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"memory-mcp/internal/embed"
 
@@ -420,16 +421,27 @@ func (d *DB) Stats() (*Stats, error) {
 	return s, nil
 }
 
-// ContextOptions 摘要查詢參數。
+// ContextOptions 摘要查詢參數。Project 有值且 Type 為空時輸出專案三段式索引。
 type ContextOptions struct {
 	Type    string
 	Project string
 	Limit   int
+	Full    bool
 }
 
-// Context 產生 bounded 的記憶摘要，依 type 分組，最近的優先。
+const (
+	contextSnippetRunes = 120
+	contextBudgetRunes  = 6000
+	contextFooter       = "全文用 memory_get(ids)，前後脈絡用 memory_timeline(id)。"
+)
+
+// Context 產生 bounded 的記憶摘要。
 func (d *DB) Context(opts ContextOptions) (string, error) {
-	query := `SELECT id, type, content, tags, project, created, updated FROM memories`
+	if opts.Project != "" && opts.Type == "" {
+		return d.projectContext(opts.Project)
+	}
+
+	query := selectMemoryCols
 	var args []any
 	var where []string
 	if opts.Type != "" {
@@ -443,56 +455,49 @@ func (d *DB) Context(opts ContextOptions) (string, error) {
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	query += ` ORDER BY created DESC, id DESC`
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = 20
 	}
-	query += ` LIMIT ?`
+	query += ` ORDER BY created DESC, id DESC LIMIT ?`
 	args = append(args, limit)
 
-	rows, err := d.db.Query(query, args...)
+	memories, err := d.queryMemories(query, args...)
 	if err != nil {
 		return "", fmt.Errorf("context: %w", err)
 	}
-	defer rows.Close()
+	if len(memories) == 0 {
+		return "No memories stored yet.", nil
+	}
+	if opts.Full {
+		return fullContext(memories), nil
+	}
 
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Memories (%d entries)\n\n", len(memories))
+	for _, m := range memories {
+		b.WriteString(CompactLine(m, contextSnippetRunes, true))
+		b.WriteByte('\n')
+	}
+	return withFooter(b.String()), nil
+}
+
+// fullContext 舊版依 type 分組的全文格式。
+func fullContext(memories []Memory) string {
 	grouped := make(map[string][]string)
-	typeOrder := []string{}
-	seen := make(map[string]bool)
-
-	for rows.Next() {
-		var m Memory
-		var created, updated string
-		if err := rows.Scan(&m.ID, &m.Type, &m.Content, &m.Tags, &m.Project, &created, &updated); err != nil {
-			return "", fmt.Errorf("context scan: %w", err)
-		}
-		m.Created, _ = time.Parse(timeLayout, created)
+	var typeOrder []string
+	for _, m := range memories {
 		line := fmt.Sprintf("- #%d %s", m.ID, m.Content)
 		if m.Tags != "" {
 			line += fmt.Sprintf(" [%s]", m.Tags)
 		}
-		grouped[m.Type] = append(grouped[m.Type], line)
-		if !seen[m.Type] {
+		if _, ok := grouped[m.Type]; !ok {
 			typeOrder = append(typeOrder, m.Type)
-			seen[m.Type] = true
 		}
+		grouped[m.Type] = append(grouped[m.Type], line)
 	}
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-
-	if len(grouped) == 0 {
-		return "No memories stored yet.", nil
-	}
-
-	total := 0
-	for _, items := range grouped {
-		total += len(items)
-	}
-
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Memories (%d entries)\n\n", total)
+	fmt.Fprintf(&b, "## Memories (%d entries)\n\n", len(memories))
 	for _, typ := range typeOrder {
 		items := grouped[typ]
 		fmt.Fprintf(&b, "### %s (%d)\n", typ, len(items))
@@ -502,7 +507,96 @@ func (d *DB) Context(opts ContextOptions) (string, error) {
 		}
 		b.WriteByte('\n')
 	}
-	return b.String(), nil
+	return b.String()
+}
+
+type contextSection struct {
+	title string
+	lines []string
+}
+
+// projectContext 專案三段式索引：全域 feedback、專案 summary、專案其他記憶。
+func (d *DB) projectContext(project string) (string, error) {
+	global, err := d.queryMemories(selectMemoryCols +
+		` WHERE type = 'feedback' AND project IN ('', 'global') ORDER BY created DESC, id DESC LIMIT 10`)
+	if err != nil {
+		return "", fmt.Errorf("context global: %w", err)
+	}
+	summaries, err := d.queryMemories(selectMemoryCols+
+		` WHERE type = 'summary' AND project = ? ORDER BY created DESC, id DESC LIMIT 3`, project)
+	if err != nil {
+		return "", fmt.Errorf("context summary: %w", err)
+	}
+	others, err := d.queryMemories(selectMemoryCols+
+		` WHERE type IN ('til', 'knowledge', 'feedback') AND project = ? ORDER BY created DESC, id DESC LIMIT 10`, project)
+	if err != nil {
+		return "", fmt.Errorf("context others: %w", err)
+	}
+
+	seen := make(map[int64]bool)
+	toLines := func(ms []Memory) []string {
+		var lines []string
+		for _, m := range ms {
+			if seen[m.ID] {
+				continue
+			}
+			seen[m.ID] = true
+			lines = append(lines, CompactLine(m, contextSnippetRunes, false))
+		}
+		return lines
+	}
+	sections := []contextSection{
+		{"### 全域 feedback", toLines(global)},
+		{fmt.Sprintf("### %s summary", project), toLines(summaries)},
+		{fmt.Sprintf("### %s 其他記憶", project), toLines(others)},
+	}
+
+	header := fmt.Sprintf("## Memory context（project: %s）\n\n", project)
+	if renderSections(header, sections) == header {
+		return "", nil
+	}
+	return withFooter(fitBudget(header, sections, contextBudgetRunes)), nil
+}
+
+// fitBudget 從最後一段尾端逐行刪除，直到內容不超過 budget rune。
+func fitBudget(header string, sections []contextSection, budget int) string {
+	body := renderSections(header, sections)
+	for utf8.RuneCountInString(body) > budget && dropLastLine(sections) {
+		body = renderSections(header, sections)
+	}
+	return body
+}
+
+func renderSections(header string, sections []contextSection) string {
+	var b strings.Builder
+	b.WriteString(header)
+	for _, s := range sections {
+		if len(s.lines) == 0 {
+			continue
+		}
+		b.WriteString(s.title + "\n")
+		for _, l := range s.lines {
+			b.WriteString(l + "\n")
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// dropLastLine 從最後一個非空段落刪一行，沒有可刪時回 false。
+func dropLastLine(sections []contextSection) bool {
+	for i := len(sections) - 1; i >= 0; i-- {
+		if n := len(sections[i].lines); n > 0 {
+			sections[i].lines = sections[i].lines[:n-1]
+			return true
+		}
+	}
+	return false
+}
+
+func withFooter(body string) string {
+	s := body + contextFooter + "\n"
+	return s + fmt.Sprintf("(約 %d tokens)\n", EstimateTokens(s))
 }
 
 // ExportAll 匯出所有記憶。

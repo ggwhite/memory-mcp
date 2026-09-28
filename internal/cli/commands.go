@@ -12,6 +12,7 @@ import (
 
 	"memory-mcp/internal/db"
 	"memory-mcp/internal/embed"
+	"memory-mcp/internal/hook"
 	"memory-mcp/internal/httpapi"
 	memcp "memory-mcp/internal/mcp"
 
@@ -98,6 +99,8 @@ func init() {
 	contextCmd.Flags().String("type", "", "filter by memory type")
 	contextCmd.Flags().String("project", "", "filter to a specific project")
 	contextCmd.Flags().IntP("limit", "n", 20, "max memories to include")
+	contextCmd.Flags().Bool("full", false, "print full content instead of index lines")
+	contextCmd.Flags().Bool("hook", false, "Claude Code SessionStart hook mode: read hook JSON from stdin, use cwd basename as project, never fail")
 
 	timelineCmd.Flags().Int("before", 3, "earlier memories to show (max 10)")
 	timelineCmd.Flags().Int("after", 3, "later memories to show (max 10)")
@@ -348,9 +351,14 @@ var contextCmd = &cobra.Command{
 	Use:   "context",
 	Short: "Show a bounded memory digest for context injection",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if isHook, _ := cmd.Flags().GetBool("hook"); isHook {
+			runContextHook()
+			return nil
+		}
 		typ, _ := cmd.Flags().GetString("type")
 		project, _ := cmd.Flags().GetString("project")
 		limit, _ := cmd.Flags().GetInt("limit")
+		full, _ := cmd.Flags().GetBool("full")
 
 		d, err := openStore()
 		if err != nil {
@@ -359,9 +367,7 @@ var contextCmd = &cobra.Command{
 		defer d.Close()
 
 		summary, err := d.Context(db.ContextOptions{
-			Type:    typ,
-			Project: project,
-			Limit:   limit,
+			Type: typ, Project: project, Limit: limit, Full: full,
 		})
 		if err != nil {
 			return err
@@ -369,6 +375,24 @@ var contextCmd = &cobra.Command{
 		fmt.Print(summary)
 		return nil
 	},
+}
+
+// runContextHook SessionStart hook：任何錯誤都靜默，不輸出也不回傳錯誤。
+func runContextHook() {
+	if os.Getenv(hook.SummarizingEnv) == "1" {
+		return
+	}
+	in := hook.ReadStdin()
+	d, err := openStore()
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	out, err := d.Context(db.ContextOptions{Project: hook.Project(in.Cwd)})
+	if err != nil {
+		return
+	}
+	fmt.Print(out)
 }
 
 var getCmd = &cobra.Command{
