@@ -248,3 +248,39 @@ func TestExportImport(t *testing.T) {
 		t.Fatalf("after import len = %d, want 2", len(all))
 	}
 }
+
+func TestStoreSanitizes(t *testing.T) {
+	d := testDB(t)
+	mem := &Memory{Type: "til", Content: "password=abcdef123 <private>x</private>"}
+	id, err := d.Store(mem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mem.Redacted != 2 {
+		t.Errorf("Redacted = %d, want 2", mem.Redacted)
+	}
+	got, _ := d.Get(id)
+	if got.Content != "password=[REDACTED]" {
+		t.Errorf("content = %q", got.Content)
+	}
+}
+
+func TestStoreEmptyAfterSanitize(t *testing.T) {
+	d := testDB(t)
+	_, err := d.Store(&Memory{Type: "til", Content: "<private>only</private>"})
+	if err != ErrEmptyAfterSanitize {
+		t.Fatalf("err = %v, want ErrEmptyAfterSanitize", err)
+	}
+}
+
+func TestUpdateSanitizes(t *testing.T) {
+	d := testDB(t)
+	id, _ := d.Store(&Memory{Type: "til", Content: "a"})
+	if err := d.Update(id, "token=abcdef123"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := d.Get(id)
+	if got.Content != "token=[REDACTED]" {
+		t.Errorf("content = %q", got.Content)
+	}
+}

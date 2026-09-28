@@ -33,23 +33,25 @@ func errResult(err error) *gomcp.CallToolResult {
 
 // handleStore 處理 memory_store tool 呼叫。
 func (s *Server) handleStore(_ context.Context, req gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	id, err := s.db.Store(&db.Memory{
+	mem := &db.Memory{
 		Type:    req.GetString("type", ""),
 		Content: req.GetString("content", ""),
 		Tags:    req.GetString("tags", ""),
 		Project: req.GetString("project", ""),
-	})
+	}
+	id, err := s.db.Store(mem)
 	if err != nil {
 		return errResult(err), nil
 	}
-	m, err := s.db.Get(id)
-	if err != nil {
-		return textResult(map[string]any{"id": id}), nil
+	out := map[string]any{"id": id}
+	if mem.Redacted > 0 {
+		out["redacted"] = mem.Redacted
+		out["note"] = fmt.Sprintf("已遮蔽 %d 處敏感內容", mem.Redacted)
 	}
-	return textResult(map[string]any{
-		"id":      id,
-		"created": m.Created.Format("2006-01-02T15:04:05"),
-	}), nil
+	if m, err := s.db.Get(id); err == nil {
+		out["created"] = m.Created.Format("2006-01-02T15:04:05")
+	}
+	return textResult(out), nil
 }
 
 // handleSearch 處理 memory_search tool 呼叫。

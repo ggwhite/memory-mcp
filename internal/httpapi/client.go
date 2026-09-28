@@ -77,11 +77,13 @@ func (c *Client) do(method, path string, query url.Values, body, out any) error 
 // Store 見 db.Store。
 func (c *Client) Store(mem *db.Memory) (int64, error) {
 	var out struct {
-		ID int64 `json:"id"`
+		ID       int64 `json:"id"`
+		Redacted int   `json:"redacted"`
 	}
 	if err := c.do(http.MethodPost, "/v1/store", nil, mem, &out); err != nil {
 		return 0, err
 	}
+	mem.Redacted = out.Redacted
 	return out.ID, nil
 }
 
