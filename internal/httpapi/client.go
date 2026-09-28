@@ -185,6 +185,9 @@ func (c *Client) Context(opts db.ContextOptions) (string, error) {
 	if opts.Limit > 0 {
 		q.Set("limit", strconv.Itoa(opts.Limit))
 	}
+	if opts.Full {
+		q.Set("full", "1")
+	}
 
 	u := c.baseURL + "/v1/context?" + q.Encode()
 	resp, err := c.hc.Get(u)

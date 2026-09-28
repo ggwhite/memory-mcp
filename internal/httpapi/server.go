@@ -168,7 +168,7 @@ func (s *Server) Handler() http.Handler {
 		q := r.URL.Query()
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		summary, err := s.store.Context(db.ContextOptions{
-			Type: q.Get("type"), Project: q.Get("project"), Limit: limit,
+			Type: q.Get("type"), Project: q.Get("project"), Limit: limit, Full: q.Get("full") == "1",
 		})
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
