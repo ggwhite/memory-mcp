@@ -435,11 +435,7 @@ var timelineCmd = &cobra.Command{
 		if jsonFlag {
 			return printJSON(memories)
 		}
-		for _, m := range memories {
-			line := db.CompactLine(m, 80, false)
-			if m.ID == id {
-				line = "→" + strings.TrimPrefix(line, "-")
-			}
+		for _, line := range db.TimelineLines(memories, id, 80) {
 			fmt.Println(line)
 		}
 		return nil

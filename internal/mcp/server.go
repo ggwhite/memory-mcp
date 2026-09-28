@@ -128,19 +128,7 @@ func (s *Server) handleTimeline(_ context.Context, req gomcp.CallToolRequest) (*
 	if err != nil {
 		return errResult(err), nil
 	}
-	return gomcp.NewToolResultText(timelineText(memories, id)), nil
-}
-
-func timelineText(memories []db.Memory, center int64) string {
-	lines := make([]string, len(memories))
-	for i, m := range memories {
-		line := db.CompactLine(m, searchSnippetRunes, false)
-		if m.ID == center {
-			line = "→" + strings.TrimPrefix(line, "-")
-		}
-		lines[i] = line
-	}
-	return strings.Join(lines, "\n")
+	return gomcp.NewToolResultText(strings.Join(db.TimelineLines(memories, id, searchSnippetRunes), "\n")), nil
 }
 
 // handleList 處理 memory_list tool 呼叫。

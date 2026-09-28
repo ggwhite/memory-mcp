@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,5 +61,26 @@ func TestParseIDs(t *testing.T) {
 	}
 	if _, err := ParseIDs("1,x"); err == nil {
 		t.Error("expected error for non-numeric id")
+	}
+}
+
+func TestTimelineLines(t *testing.T) {
+	memories := []Memory{
+		{ID: 1, Type: "summary", Content: "a", Created: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{ID: 2, Type: "summary", Content: "b", Created: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+		{ID: 3, Type: "summary", Content: "c", Created: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)},
+	}
+	lines := TimelineLines(memories, 2, 80)
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want 3", len(lines))
+	}
+	if !strings.HasPrefix(lines[0], "- #1 ") {
+		t.Errorf("lines[0] = %q, want prefix '- #1 '", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "→ #2 ") {
+		t.Errorf("lines[1] = %q, want prefix '→ #2 '", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "- #3 ") {
+		t.Errorf("lines[2] = %q, want prefix '- #3 '", lines[2])
 	}
 }

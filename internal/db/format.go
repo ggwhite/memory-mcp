@@ -53,6 +53,19 @@ func EstimateTokens(s string) int {
 	return cjk + (other+3)/4
 }
 
+// TimelineLines 將 timeline 結果轉成索引行，中心那筆以「→」開頭。
+func TimelineLines(memories []Memory, center int64, n int) []string {
+	lines := make([]string, len(memories))
+	for i, m := range memories {
+		line := CompactLine(m, n, false)
+		if m.ID == center {
+			line = "→" + strings.TrimPrefix(line, "-")
+		}
+		lines[i] = line
+	}
+	return lines
+}
+
 // ParseIDs 解析逗號或空白分隔的記憶 ID。
 func ParseIDs(s string) ([]int64, error) {
 	fields := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' })
