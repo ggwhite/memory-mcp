@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -283,4 +284,83 @@ func TestUpdateSanitizes(t *testing.T) {
 	if got.Content != "token=[REDACTED]" {
 		t.Errorf("content = %q", got.Content)
 	}
+}
+
+func TestGetMany(t *testing.T) {
+	d := testDB(t)
+	a, _ := d.Store(&Memory{Type: "til", Content: "a"})
+	b, _ := d.Store(&Memory{Type: "til", Content: "b"})
+	got, err := d.GetMany([]int64{b, 999, a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != b || got[1].ID != a {
+		t.Fatalf("got %+v", got)
+	}
+	if got, _ := d.GetMany(nil); got != nil {
+		t.Errorf("empty ids: got %+v", got)
+	}
+}
+
+func TestTimeline(t *testing.T) {
+	d := testDB(t)
+	var p []int64
+	for i := 0; i < 5; i++ {
+		id, _ := d.Store(&Memory{Type: "summary", Content: fmt.Sprintf("p%d", i), Project: "p"})
+		p = append(p, id)
+		d.Store(&Memory{Type: "summary", Content: fmt.Sprintf("q%d", i), Project: "q"})
+	}
+
+	got, err := d.Timeline(p[2], 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := memIDs(got); !equalIDs(ids, []int64{p[1], p[2], p[3]}) {
+		t.Errorf("middle: got %v", ids)
+	}
+
+	got, _ = d.Timeline(p[0], 3, 2)
+	if ids := memIDs(got); !equalIDs(ids, []int64{p[0], p[1], p[2]}) {
+		t.Errorf("first: got %v", ids)
+	}
+
+	got, _ = d.Timeline(p[4], 20, 3)
+	if ids := memIDs(got); !equalIDs(ids, p) {
+		t.Errorf("last with clamp: got %v", ids)
+	}
+
+	if _, err := d.Timeline(9999, 3, 3); err == nil {
+		t.Error("expected error for missing center")
+	}
+}
+
+func TestTimelineEmptyProject(t *testing.T) {
+	d := testDB(t)
+	a, _ := d.Store(&Memory{Type: "til", Content: "a"})
+	d.Store(&Memory{Type: "til", Content: "x", Project: "other"})
+	b, _ := d.Store(&Memory{Type: "til", Content: "b"})
+	got, _ := d.Timeline(a, 3, 3)
+	if ids := memIDs(got); !equalIDs(ids, []int64{a, b}) {
+		t.Errorf("got %v", ids)
+	}
+}
+
+func memIDs(ms []Memory) []int64 {
+	out := make([]int64, len(ms))
+	for i, m := range ms {
+		out[i] = m.ID
+	}
+	return out
+}
+
+func equalIDs(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

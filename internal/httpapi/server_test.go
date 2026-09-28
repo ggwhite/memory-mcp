@@ -40,3 +40,25 @@ func TestClientStoreRedacted(t *testing.T) {
 		t.Errorf("content = %q", got.Content)
 	}
 }
+
+func TestClientGetManyAndTimeline(t *testing.T) {
+	c, d := testClient(t)
+	a, _ := d.Store(&db.Memory{Type: "til", Content: "a", Project: "p"})
+	b, _ := d.Store(&db.Memory{Type: "til", Content: "b", Project: "p"})
+
+	got, err := c.GetMany([]int64{b, a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != b {
+		t.Fatalf("GetMany got %+v", got)
+	}
+
+	tl, err := c.Timeline(a, 3, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tl) != 2 || tl[0].ID != a || tl[1].ID != b {
+		t.Fatalf("Timeline got %+v", tl)
+	}
+}

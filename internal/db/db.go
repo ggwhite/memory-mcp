@@ -48,6 +48,8 @@ type Stats struct {
 type Store interface {
 	Store(mem *Memory) (int64, error)
 	Get(id int64) (*Memory, error)
+	GetMany(ids []int64) ([]Memory, error)
+	Timeline(id int64, before, after int) ([]Memory, error)
 	Update(id int64, content string) error
 	Delete(id int64) error
 	List(opts ListOptions) ([]Memory, error)
@@ -206,6 +208,91 @@ func (d *DB) Get(id int64) (*Memory, error) {
 	m.Created, _ = time.Parse(timeLayout, created)
 	m.Updated, _ = time.Parse(timeLayout, updated)
 	return &m, nil
+}
+
+const selectMemoryCols = `SELECT id, type, content, tags, project, created, updated FROM memories`
+
+// queryMemories 執行 SELECT selectMemoryCols 查詢並掃描成 []Memory。
+func (d *DB) queryMemories(query string, args ...any) ([]Memory, error) {
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Memory
+	for rows.Next() {
+		var m Memory
+		var created, updated string
+		if err := rows.Scan(&m.ID, &m.Type, &m.Content, &m.Tags, &m.Project, &created, &updated); err != nil {
+			return nil, err
+		}
+		m.Created, _ = time.Parse(timeLayout, created)
+		m.Updated, _ = time.Parse(timeLayout, updated)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// GetMany 依傳入順序取得多筆記憶，找不到的 ID 略過。
+func (d *DB) GetMany(ids []int64) ([]Memory, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	found, err := d.queryMemories(selectMemoryCols+` WHERE id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get many: %w", err)
+	}
+	byID := make(map[int64]Memory, len(found))
+	for _, m := range found {
+		byID[m.ID] = m
+	}
+	var out []Memory
+	for _, id := range ids {
+		if m, ok := byID[id]; ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+const timelineMax = 10
+
+func clampTimeline(n int) int {
+	return min(max(n, 0), timelineMax)
+}
+
+// Timeline 回傳同 project 依時間排序、以 id 為中心的前後記憶（含中心，舊到新）。
+func (d *DB) Timeline(id int64, before, after int) ([]Memory, error) {
+	center, err := d.Get(id)
+	if err != nil {
+		return nil, fmt.Errorf("timeline: %w", err)
+	}
+	created := center.Created.Format(timeLayout)
+
+	prev, err := d.queryMemories(selectMemoryCols+
+		` WHERE project = ? AND (created < ? OR (created = ? AND id < ?)) ORDER BY created DESC, id DESC LIMIT ?`,
+		center.Project, created, created, id, clampTimeline(before))
+	if err != nil {
+		return nil, fmt.Errorf("timeline before: %w", err)
+	}
+	next, err := d.queryMemories(selectMemoryCols+
+		` WHERE project = ? AND (created > ? OR (created = ? AND id > ?)) ORDER BY created ASC, id ASC LIMIT ?`,
+		center.Project, created, created, id, clampTimeline(after))
+	if err != nil {
+		return nil, fmt.Errorf("timeline after: %w", err)
+	}
+
+	out := make([]Memory, 0, len(prev)+1+len(next))
+	for i := len(prev) - 1; i >= 0; i-- {
+		out = append(out, prev[i])
+	}
+	out = append(out, *center)
+	return append(out, next...), nil
 }
 
 // Update 更新指定記憶的內容（寫入前先 Sanitize）。

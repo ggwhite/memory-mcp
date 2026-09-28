@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"memory-mcp/internal/db"
@@ -94,6 +95,36 @@ func (c *Client) Get(id int64) (*db.Memory, error) {
 		return nil, err
 	}
 	return &m, nil
+}
+
+// GetMany 見 db.Store。
+func (c *Client) GetMany(ids []int64) ([]db.Memory, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	q := url.Values{}
+	q.Set("ids", strings.Join(parts, ","))
+	var memories []db.Memory
+	if err := c.do(http.MethodGet, "/v1/memories", q, nil, &memories); err != nil {
+		return nil, err
+	}
+	return memories, nil
+}
+
+// Timeline 見 db.Store。
+func (c *Client) Timeline(id int64, before, after int) ([]db.Memory, error) {
+	q := url.Values{}
+	q.Set("before", strconv.Itoa(before))
+	q.Set("after", strconv.Itoa(after))
+	var memories []db.Memory
+	if err := c.do(http.MethodGet, "/v1/memories/"+strconv.FormatInt(id, 10)+"/timeline", q, nil, &memories); err != nil {
+		return nil, err
+	}
+	return memories, nil
 }
 
 // Update 見 db.Store。
