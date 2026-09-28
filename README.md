@@ -28,6 +28,9 @@ memory-mcp search "全文搜索"
 
 # List / manage
 memory-mcp list [--type type] [--since 7d]
+memory-mcp search --compact "trigram"   # 一行一筆索引
+memory-mcp get 12 34                    # 取全文
+memory-mcp timeline 12 --before 3 --after 3
 memory-mcp update <id> "new content"
 memory-mcp delete <id>
 memory-mcp stats
@@ -62,6 +65,21 @@ Recall when starting a task or need context:
   memory-mcp search "keyword"
   memory-mcp list --since 7d
 ```
+
+### Claude Code hooks
+
+```json
+"SessionStart": [{"matcher": "^(startup|resume|clear|compact)$", "hooks": [
+  {"type": "command", "command": "/path/to/memory-mcp context --hook", "timeout": 10}
+]}],
+"SessionEnd": [{"hooks": [
+  {"type": "command", "command": "/path/to/memory-mcp summarize --hook", "timeout": 10}
+]}]
+```
+
+- `context --hook`：以工作目錄 basename（小寫）當 project，注入全域 feedback、專案最近 3 筆 summary、其他 10 筆記憶的索引（上限 6,000 字）。
+- `summarize --hook`：背景呼叫 `claude -p --model haiku` 摘要本次 session，存成 `summary`（tag `auto-summary`）。session 中已手動存 summary、或 user 訊息少於 3 則時跳過。log 在 DB 同目錄的 `summarize.log`。
+- 存入內容會刪除 `<private>…</private>` 並遮蔽常見金鑰格式。
 
 ### Codex / Gemini / Other LLM Agents
 
