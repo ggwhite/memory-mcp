@@ -25,7 +25,7 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`),
 }
 
-var keyValue = regexp.MustCompile(`(?i)(password|passwd|pwd|secret|token|api[_-]?key)(\s*[:=]\s*["']?)([^\s"',;]{6,})`)
+var keyValue = regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|token|api[_-]?key)(\s*[:=]\s*["']?)([^\s"',;/][^\s"',;]{5,})`)
 
 // Sanitize 刪除 <private> 區段並遮蔽常見金鑰格式，回傳過濾後內容（已 TrimSpace）與處理數。
 func Sanitize(content string) (string, int) {
@@ -42,7 +42,7 @@ func Sanitize(content string) (string, int) {
 	}
 	out = keyValue.ReplaceAllStringFunc(out, func(m string) string {
 		sub := keyValue.FindStringSubmatch(m)
-		if sub[3] == RedactedMark {
+		if strings.HasPrefix(sub[3], RedactedMark) {
 			return m
 		}
 		n++
