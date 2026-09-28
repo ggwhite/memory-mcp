@@ -51,6 +51,37 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]int64{"id": id, "redacted": int64(mem.Redacted)})
 	})
 
+	mux.HandleFunc("GET /v1/memories", func(w http.ResponseWriter, r *http.Request) {
+		ids, err := db.ParseIDs(r.URL.Query().Get("ids"))
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		memories, err := s.store.GetMany(ids)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, memories)
+	})
+
+	mux.HandleFunc("GET /v1/memories/{id}/timeline", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		q := r.URL.Query()
+		before, _ := strconv.Atoi(q.Get("before"))
+		after, _ := strconv.Atoi(q.Get("after"))
+		memories, err := s.store.Timeline(id, before, after)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, memories)
+	})
+
 	mux.HandleFunc("GET /v1/memories/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
