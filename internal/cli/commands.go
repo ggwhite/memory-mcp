@@ -65,18 +65,6 @@ func printJSON(v any) error {
 	return enc.Encode(v)
 }
 
-func formatMemory(m db.Memory) string {
-	line := fmt.Sprintf("#%d [%s] %s", m.ID, m.Type, m.Created.Format("2006-01-02"))
-	if m.Tags != "" {
-		line += fmt.Sprintf("  tags:%s", m.Tags)
-	}
-	if m.Project != "" {
-		line += fmt.Sprintf("  project:%s", m.Project)
-	}
-	line += "\n  " + m.Content
-	return line
-}
-
 var rootCmd = &cobra.Command{
 	Use:   "memory-mcp",
 	Short: "Cross-session persistent memory for AI coding agents",
@@ -174,7 +162,7 @@ var searchCmd = &cobra.Command{
 			if i > 0 {
 				fmt.Println()
 			}
-			fmt.Println(formatMemory(r.Memory))
+			fmt.Println(db.FormatFull(r.Memory))
 		}
 		return nil
 	},
@@ -207,7 +195,7 @@ var listCmd = &cobra.Command{
 			if i > 0 {
 				fmt.Println()
 			}
-			fmt.Println(formatMemory(m))
+			fmt.Println(db.FormatFull(m))
 		}
 		return nil
 	},
