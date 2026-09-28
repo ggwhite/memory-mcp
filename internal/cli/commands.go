@@ -4,17 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"memory-mcp/internal/db"
 	"memory-mcp/internal/embed"
 	"memory-mcp/internal/hook"
 	"memory-mcp/internal/httpapi"
 	memcp "memory-mcp/internal/mcp"
+	"memory-mcp/internal/summarize"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
@@ -108,7 +113,11 @@ func init() {
 	serveCmd.Flags().String("http", "", "listen on this addr as an HTTP MCP server (e.g. 127.0.0.1:8766); empty = stdio")
 	serveCmd.Flags().String("http-api", "", "listen on this addr as a REST JSON API server (always local DB, for --remote clients to connect to)")
 
-	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd, reindexCmd, getCmd, timelineCmd)
+	summarizeCmd.Flags().Bool("hook", false, "Claude Code SessionEnd hook mode: spawn a background worker and return immediately")
+	summarizeCmd.Flags().String("worker", "", "internal: run summary from saved hook input file")
+	summarizeCmd.Flags().MarkHidden("worker")
+
+	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd, reindexCmd, getCmd, timelineCmd, summarizeCmd)
 }
 
 var storeCmd = &cobra.Command{
@@ -393,6 +402,103 @@ func runContextHook() {
 		return
 	}
 	fmt.Print(out)
+}
+
+var summarizeCmd = &cobra.Command{
+	Use:   "summarize",
+	Short: "Auto-summarize a Claude Code session into a summary memory (SessionEnd hook)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if file, _ := cmd.Flags().GetString("worker"); file != "" {
+			runSummarizeWorker(file)
+			return nil
+		}
+		if isHook, _ := cmd.Flags().GetBool("hook"); isHook {
+			runSummarizeHook()
+			return nil
+		}
+		return fmt.Errorf("use --hook")
+	},
+}
+
+// summarizeLogf 追加一行到 DB 同目錄的 summarize.log。
+func summarizeLogf(format string, args ...any) {
+	dir := filepath.Dir(defaultDBPath())
+	if dbPath != "" {
+		dir = filepath.Dir(dbPath)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "summarize.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s %s\n", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
+}
+
+// runSummarizeHook 前景：把 hook JSON 存成暫存檔，fork 背景 worker 後立即返回。
+func runSummarizeHook() {
+	if os.Getenv(hook.SummarizingEnv) == "1" {
+		return
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil || len(data) == 0 {
+		summarizeLogf("- - hook: empty stdin")
+		return
+	}
+	tmp, err := os.CreateTemp("", "memory-mcp-summarize-*.json")
+	if err != nil {
+		summarizeLogf("- - hook: temp file: %v", err)
+		return
+	}
+	tmp.Write(data)
+	tmp.Close()
+
+	exe, err := os.Executable()
+	if err != nil {
+		summarizeLogf("- - hook: executable: %v", err)
+		os.Remove(tmp.Name())
+		return
+	}
+	workerArgs := []string{"summarize", "--worker", tmp.Name()}
+	if dbPath != "" {
+		workerArgs = append(workerArgs, "--db", dbPath)
+	}
+	if remoteFlag != "" {
+		workerArgs = append(workerArgs, "--remote", remoteFlag)
+	}
+	c := exec.Command(exe, workerArgs...)
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := c.Start(); err != nil {
+		summarizeLogf("- - hook: start worker: %v", err)
+		os.Remove(tmp.Name())
+		return
+	}
+	c.Process.Release()
+}
+
+// runSummarizeWorker 背景：讀暫存檔後刪除，執行摘要並寫 log。
+func runSummarizeWorker(file string) {
+	data, err := os.ReadFile(file)
+	os.Remove(file)
+	if err != nil {
+		summarizeLogf("- - worker: read input: %v", err)
+		return
+	}
+	in := hook.Read(strings.NewReader(string(data)))
+
+	d, err := openStore()
+	if err != nil {
+		summarizeLogf("%s - worker: open store: %v", in.SessionID, err)
+		return
+	}
+	defer d.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	summarize.Run(ctx, in, summarize.Deps{
+		Store: d,
+		Run:   summarize.ClaudeRunner,
+		Logf:  summarizeLogf,
+	})
 }
 
 var getCmd = &cobra.Command{
