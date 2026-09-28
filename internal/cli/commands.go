@@ -87,6 +87,7 @@ func init() {
 
 	searchCmd.Flags().String("type", "", "filter by memory type")
 	searchCmd.Flags().IntP("limit", "n", 5, "max results")
+	searchCmd.Flags().Bool("compact", false, "print one index line per result")
 
 	listCmd.Flags().String("type", "", "filter by memory type")
 	listCmd.Flags().IntP("limit", "n", 10, "max results")
@@ -98,10 +99,13 @@ func init() {
 	contextCmd.Flags().String("project", "", "filter to a specific project")
 	contextCmd.Flags().IntP("limit", "n", 20, "max memories to include")
 
+	timelineCmd.Flags().Int("before", 3, "earlier memories to show (max 10)")
+	timelineCmd.Flags().Int("after", 3, "later memories to show (max 10)")
+
 	serveCmd.Flags().String("http", "", "listen on this addr as an HTTP MCP server (e.g. 127.0.0.1:8766); empty = stdio")
 	serveCmd.Flags().String("http-api", "", "listen on this addr as a REST JSON API server (always local DB, for --remote clients to connect to)")
 
-	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd, reindexCmd)
+	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd, reindexCmd, getCmd, timelineCmd)
 }
 
 var storeCmd = &cobra.Command{
@@ -157,6 +161,12 @@ var searchCmd = &cobra.Command{
 		}
 		if jsonFlag {
 			return printJSON(results)
+		}
+		if compact, _ := cmd.Flags().GetBool("compact"); compact {
+			for _, r := range results {
+				fmt.Println(db.CompactLine(r.Memory, 80, true))
+			}
+			return nil
 		}
 		for i, r := range results {
 			if i > 0 {
@@ -357,6 +367,81 @@ var contextCmd = &cobra.Command{
 			return err
 		}
 		fmt.Print(summary)
+		return nil
+	},
+}
+
+var getCmd = &cobra.Command{
+	Use:   "get <id>...",
+	Short: "Show full content of memories by id",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ids, err := db.ParseIDs(strings.Join(args, " "))
+		if err != nil {
+			return err
+		}
+		d, err := openStore()
+		if err != nil {
+			return err
+		}
+		defer d.Close()
+
+		memories, err := d.GetMany(ids)
+		if err != nil {
+			return err
+		}
+		if jsonFlag {
+			return printJSON(memories)
+		}
+		found := make(map[int64]bool, len(memories))
+		for i, m := range memories {
+			found[m.ID] = true
+			if i > 0 {
+				fmt.Println()
+			}
+			fmt.Println(db.FormatFull(m))
+		}
+		for _, id := range ids {
+			if !found[id] {
+				fmt.Fprintf(os.Stderr, "#%d not found\n", id)
+			}
+		}
+		return nil
+	},
+}
+
+var timelineCmd = &cobra.Command{
+	Use:   "timeline <id>",
+	Short: "Show memories before and after a memory in the same project",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		id, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid id: %w", err)
+		}
+		before, _ := cmd.Flags().GetInt("before")
+		after, _ := cmd.Flags().GetInt("after")
+
+		d, err := openStore()
+		if err != nil {
+			return err
+		}
+		defer d.Close()
+
+		memories, err := d.Timeline(id, before, after)
+		if err != nil {
+			return err
+		}
+		if jsonFlag {
+			return printJSON(memories)
+		}
+		for _, m := range memories {
+			line := db.CompactLine(m, 80, false)
+			if m.ID == id {
+				line = "→" + strings.TrimPrefix(line, "-")
+			}
+			fmt.Println(line)
+		}
 		return nil
 	},
 }

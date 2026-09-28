@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"memory-mcp/internal/db"
 
 	gomcp "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+)
+
+const (
+	searchSnippetRunes = 80
+	getMaxIDs          = 20
 )
 
 // Server MCP server，封裝 DB 操作為 MCP tools。
@@ -54,7 +60,7 @@ func (s *Server) handleStore(_ context.Context, req gomcp.CallToolRequest) (*gom
 	return textResult(out), nil
 }
 
-// handleSearch 處理 memory_search tool 呼叫。
+// handleSearch 處理 memory_search tool 呼叫，compact（預設）只回索引行。
 func (s *Server) handleSearch(_ context.Context, req gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
 	limit := req.GetInt("limit", 5)
 	if limit <= 0 {
@@ -68,7 +74,73 @@ func (s *Server) handleSearch(_ context.Context, req gomcp.CallToolRequest) (*go
 	if err != nil {
 		return errResult(err), nil
 	}
-	return textResult(results), nil
+	if !req.GetBool("compact", true) {
+		return textResult(results), nil
+	}
+	if len(results) == 0 {
+		return gomcp.NewToolResultText("No results."), nil
+	}
+	lines := make([]string, len(results))
+	for i, r := range results {
+		lines[i] = db.CompactLine(r.Memory, searchSnippetRunes, true)
+	}
+	return gomcp.NewToolResultText(strings.Join(lines, "\n")), nil
+}
+
+// handleGet 依 ID 取回全文，找不到的標示 not found。
+func (s *Server) handleGet(_ context.Context, req gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	ids, err := db.ParseIDs(req.GetString("ids", ""))
+	if err != nil {
+		return errResult(err), nil
+	}
+	if len(ids) == 0 {
+		return errResult(fmt.Errorf("ids is required")), nil
+	}
+	if len(ids) > getMaxIDs {
+		return errResult(fmt.Errorf("too many ids: %d (max %d)", len(ids), getMaxIDs)), nil
+	}
+	found, err := s.db.GetMany(ids)
+	if err != nil {
+		return errResult(err), nil
+	}
+	byID := make(map[int64]db.Memory, len(found))
+	for _, m := range found {
+		byID[m.ID] = m
+	}
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		if m, ok := byID[id]; ok {
+			parts[i] = db.FormatFull(m)
+		} else {
+			parts[i] = fmt.Sprintf("#%d not found", id)
+		}
+	}
+	return gomcp.NewToolResultText(strings.Join(parts, "\n\n")), nil
+}
+
+// handleTimeline 回傳同 project 前後記憶的索引，中心那筆以「→」標示。
+func (s *Server) handleTimeline(_ context.Context, req gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	id := int64(req.GetFloat("id", 0))
+	if id <= 0 {
+		return errResult(fmt.Errorf("id is required")), nil
+	}
+	memories, err := s.db.Timeline(id, req.GetInt("before", 3), req.GetInt("after", 3))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return gomcp.NewToolResultText(timelineText(memories, id)), nil
+}
+
+func timelineText(memories []db.Memory, center int64) string {
+	lines := make([]string, len(memories))
+	for i, m := range memories {
+		line := db.CompactLine(m, searchSnippetRunes, false)
+		if m.ID == center {
+			line = "→" + strings.TrimPrefix(line, "-")
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
 }
 
 // handleList 處理 memory_list tool 呼叫。
@@ -133,11 +205,24 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	), s.handleStore)
 
 	srv.AddTool(gomcp.NewTool("memory_search",
-		gomcp.WithDescription("Search past memories by keyword (FTS5). Use when: starting a new task (check for relevant past solutions), hitting a familiar-looking problem (search for prior fixes), needing to recall user preferences, or working on a project you've touched before."),
+		gomcp.WithDescription("Search past memories (FTS5 + semantic). Returns one index line per hit by default (id, type, project, date, 80-char snippet); call memory_get with the ids you need for full content. Use when: starting a new task, hitting a familiar-looking problem, needing to recall user preferences, or working on a project you've touched before."),
 		gomcp.WithString("query", gomcp.Required(), gomcp.Description("Search keywords — supports CJK, minimum 3 characters")),
 		gomcp.WithString("type", gomcp.Description("Filter by type: feedback, til, summary, knowledge")),
 		gomcp.WithNumber("limit", gomcp.Description("Max results (default 5)")),
+		gomcp.WithBoolean("compact", gomcp.Description("true (default) = index lines only; false = full JSON results")),
 	), s.handleSearch)
+
+	srv.AddTool(gomcp.NewTool("memory_get",
+		gomcp.WithDescription("Fetch full content of memories by id, after memory_search / memory_context gave you the ids."),
+		gomcp.WithString("ids", gomcp.Required(), gomcp.Description("Comma-separated ids, e.g. \"1030,1027\" (max 20)")),
+	), s.handleGet)
+
+	srv.AddTool(gomcp.NewTool("memory_timeline",
+		gomcp.WithDescription("Show memories stored before and after a given memory in the same project, as index lines. Use to follow a chain of session summaries."),
+		gomcp.WithNumber("id", gomcp.Required(), gomcp.Description("Center memory id")),
+		gomcp.WithNumber("before", gomcp.Description("How many earlier memories (default 3, max 10)")),
+		gomcp.WithNumber("after", gomcp.Description("How many later memories (default 3, max 10)")),
+	), s.handleTimeline)
 
 	srv.AddTool(gomcp.NewTool("memory_list",
 		gomcp.WithDescription("List recent memories chronologically. Use to review what was stored recently or browse by type."),
