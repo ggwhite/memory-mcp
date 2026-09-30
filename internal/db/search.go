@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,9 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = 5
+	}
+	if ftsQuery(opts.Query) == "" {
+		return nil, nil
 	}
 
 	ftsResults, err := d.ftsSearch(opts, limit)
@@ -95,7 +99,7 @@ func (d *DB) ftsSearch(opts SearchOptions, limit int) ([]SearchResult, error) {
 		FROM memories_fts f
 		JOIN memories m ON m.id = f.rowid
 		WHERE memories_fts MATCH ?`
-	args := []any{opts.Query}
+	args := []any{ftsQuery(opts.Query)}
 
 	if opts.Type != "" {
 		query += ` AND m.type = ?`
@@ -123,6 +127,18 @@ func (d *DB) ftsSearch(opts SearchOptions, limit int) ([]SearchResult, error) {
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// ftsQuery 把使用者輸入依空白切成 token，每個 token 包成 FTS5 phrase（內含
+// 的 `"` 跳脫成 `""`），讓 `-`、`:`、`*`、括號與 AND/OR/NOT/NEAR 等都當字面
+// 比對，不被解析成 FTS5 查詢語法。phrase 之間以空白相接，維持 FTS5 隱含 AND
+// 的多關鍵字語意。輸入沒有任何 token 時回傳空字串。
+func ftsQuery(input string) string {
+	tokens := strings.Fields(input)
+	for i, tok := range tokens {
+		tokens[i] = `"` + strings.ReplaceAll(tok, `"`, `""`) + `"`
+	}
+	return strings.Join(tokens, " ")
 }
 
 // vectorRank 計算 queryVec 與所有（依 type 篩選後）記憶向量的 cosine

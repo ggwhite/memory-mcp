@@ -94,3 +94,17 @@ func TestSearchRespectsLimitAfterFusion(t *testing.T) {
 		t.Fatalf("len = %d, want 2", len(results))
 	}
 }
+
+func TestHybridSearchHandlesSpecialCharacters(t *testing.T) {
+	d := testDB(t)
+	d.Store(&Memory{Type: "summary", Content: "memory-mcp summary hook"})
+	d.SetEmbedder(&keyedEmbedder{vectors: map[string][]float32{}})
+
+	results, err := d.Search(SearchOptions{Query: "memory-mcp 串連 summary hook", Type: "summary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len = %d, want 1", len(results))
+	}
+}
