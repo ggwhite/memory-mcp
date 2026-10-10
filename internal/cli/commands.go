@@ -600,9 +600,18 @@ var reindexCmd = &cobra.Command{
 			return err
 		}
 		if jsonFlag {
-			return printJSON(stats)
+			err = printJSON(stats)
+		} else {
+			fmt.Printf("Reindexed %d/%d memories (%d failed)\n", stats.Processed, stats.Total, stats.Failed)
 		}
-		fmt.Printf("Reindexed %d/%d memories (%d failed)\n", stats.Processed, stats.Total, stats.Failed)
+		if err != nil || stats.Failed == 0 {
+			return err
+		}
+		if stats.Processed == 0 {
+			cmd.SilenceUsage = true
+			return fmt.Errorf("reindex failed for all %d memories, first error: %w", stats.Failed, stats.FirstErr)
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "reindex: %d failed, first error: %v\n", stats.Failed, stats.FirstErr)
 		return nil
 	},
 }

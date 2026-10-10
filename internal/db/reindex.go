@@ -10,6 +10,8 @@ type ReindexStats struct {
 	Total     int `json:"total"`
 	Processed int `json:"processed"`
 	Failed    int `json:"failed"`
+	// FirstErr 第一筆失敗的原因，全部成功時為 nil。
+	FirstErr error `json:"-"`
 }
 
 // Reindex 為缺少 embedding、或 embedding 使用舊模型的記憶補算向量。embedder
@@ -51,12 +53,14 @@ func (d *DB) Reindex(ctx context.Context) (ReindexStats, error) {
 
 	for _, p := range items {
 		vec, err := d.embedder.Embed(ctx, p.content)
+		if err == nil {
+			err = d.upsertEmbedding(p.id, vec, d.embedder.Model())
+		}
 		if err != nil {
 			stats.Failed++
-			continue
-		}
-		if err := d.upsertEmbedding(p.id, vec, d.embedder.Model()); err != nil {
-			stats.Failed++
+			if stats.FirstErr == nil {
+				stats.FirstErr = fmt.Errorf("memory #%d: %w", p.id, err)
+			}
 			continue
 		}
 		stats.Processed++

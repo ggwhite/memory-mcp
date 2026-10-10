@@ -312,3 +312,38 @@ func TestRecallPromptDiverseHeadQuestionLast(t *testing.T) {
 		t.Errorf("should hit #1: %q %q", out, errs)
 	}
 }
+
+func TestRecallHookSystemMessages(t *testing.T) {
+	env := setupRecall(t)
+	setupVault(t)
+	vault := os.Getenv(obnote.RootEnv)
+	q := "305-qa 年度報稅匯出又卡住了"
+	silent := map[string]string{
+		"task-notification":   "<task-notification>\n<task-id>b1</task-id> " + q + "</task-notification>",
+		"leading space":       "  \n<task-notification>" + q + "</task-notification>",
+		"system-reminder":     "<system-reminder>" + q + "</system-reminder>",
+		"SYSTEM NOTIFICATION": "[SYSTEM NOTIFICATION] " + q,
+		"local-command":       "<local-command-stdout>" + q + "</local-command-stdout>",
+		"command-name":        "<command-name>/foo</command-name> " + q,
+	}
+	for name, p := range silent {
+		if out, errs := runRecall(env, hookJSON("sys-"+name, env.work, p), time.Second); out != "" || errs != "" {
+			t.Errorf("%s: want silent, got stdout=%q stderr=%q", name, out, errs)
+		}
+	}
+	// 對照組：同一段文字不包標籤時命中 #1
+	if out, _ := runRecall(env, hookJSON("sys-control", env.work, q), time.Second); !strings.Contains(out, "- #1 ") {
+		t.Errorf("control: plain prompt should hit #1, got %q", out)
+	}
+
+	// 使用者文字在前：只用標籤前的文字檢索，標籤內的 305-qa 不得命中
+	mixed := "雲夢記看到第幾季了<system-reminder>" + q + "</system-reminder>"
+	out, errs := runRecall(env, hookJSON("sys-mixed", env.free, mixed), time.Second)
+	if out != recallHeader+"- 筆記 "+vault+"/追劇/雲夢記.md\n" {
+		t.Errorf("mixed: got %q (stderr %q)", out, errs)
+	}
+	// 對照組：同樣內容不包標籤時 #1 會一起命中
+	if out, _ := runRecall(env, hookJSON("sys-mixed-control", env.free, "雲夢記看到第幾季了 "+q), time.Second); !strings.Contains(out, "- #1 ") || !strings.Contains(out, "雲夢記.md") {
+		t.Errorf("mixed control: want both #1 and note, got %q", out)
+	}
+}
