@@ -404,6 +404,8 @@ func runContextHook() {
 	if err != nil {
 		return
 	}
+	// 記下已注入的 id，讓 recall --hook 同一 session 不重複注入。
+	hook.AddInjected(in.SessionID, contextIDs(out))
 	fmt.Print(out)
 }
 

@@ -433,6 +433,7 @@ const (
 	contextSnippetRunes   = 120
 	contextBudgetRunes    = 6000
 	personalProjectPrefix = "personal-"
+	homeProject           = "home"
 	contextFooter         = "全文用 memory_get(ids)，前後脈絡用 memory_timeline(id)。"
 )
 
@@ -518,7 +519,7 @@ type contextSection struct {
 
 // projectContext 專案索引：全域 feedback、專案 feedback、專案 summary、專案其他記憶。
 // 段落順序即裁切優先序（fitBudget 從最後一段裁起），feedback 放前面確保最後才被裁。
-// personal- 開頭的 project 是個人記憶，不注入任何專案段。
+// personal- 開頭的 project 是個人記憶，home 是家目錄的雜項 session，兩者都不注入專案段。
 func (d *DB) projectContext(project string) (string, error) {
 	global, err := d.queryMemories(selectMemoryCols +
 		` WHERE type = 'feedback' AND project = 'global' ORDER BY created DESC, id DESC LIMIT 10`)
@@ -526,7 +527,7 @@ func (d *DB) projectContext(project string) (string, error) {
 		return "", fmt.Errorf("context global: %w", err)
 	}
 	var feedback, summaries, others []Memory
-	if !strings.HasPrefix(project, personalProjectPrefix) {
+	if !strings.HasPrefix(project, personalProjectPrefix) && project != homeProject {
 		feedback, err = d.queryMemories(selectMemoryCols+
 			` WHERE type = 'feedback' AND project = ? ORDER BY created DESC, id DESC LIMIT 20`, project)
 		if err != nil {

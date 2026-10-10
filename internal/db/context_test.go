@@ -199,3 +199,31 @@ func TestProjectContextBudgetTrimsOthersFirst(t *testing.T) {
 		t.Errorf("other lines = %d, want trimmed below 10:\n%s", n, out)
 	}
 }
+
+func TestProjectContextHomeOnlyGlobal(t *testing.T) {
+	d := testDB(t)
+	d.Store(&Memory{Type: "feedback", Content: "real global rule", Project: "global"})
+	d.Store(&Memory{Type: "feedback", Content: "home feedback", Project: "home"})
+	d.Store(&Memory{Type: "summary", Content: "home summary", Project: "home"})
+	d.Store(&Memory{Type: "til", Content: "home til", Project: "home"})
+
+	out, err := d.Context(ContextOptions{Project: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "real global rule") {
+		t.Errorf("missing global rule:\n%s", out)
+	}
+	for _, bad := range []string{"home feedback", "home summary", "home til", "### home"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("unexpected %q in:\n%s", bad, out)
+		}
+	}
+
+	// 對照：一般 project 仍注入專案段
+	d.Store(&Memory{Type: "til", Content: "kairos til", Project: "kairos"})
+	out, _ = d.Context(ContextOptions{Project: "kairos"})
+	if !strings.Contains(out, "kairos til") {
+		t.Errorf("non-home project should keep project sections:\n%s", out)
+	}
+}

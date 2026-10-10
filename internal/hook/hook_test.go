@@ -24,6 +24,7 @@ func TestReadEmptyInput(t *testing.T) {
 }
 
 func TestProject(t *testing.T) {
+	t.Setenv(ProjectsEnv, filepath.Join(t.TempDir(), "none.json"))
 	if got := Project("/Users/white/Tyche/Kairos"); got != "kairos" {
 		t.Errorf("got %q", got)
 	}
@@ -33,5 +34,141 @@ func TestProject(t *testing.T) {
 	wd, _ := os.Getwd()
 	if got := Project(""); got != strings.ToLower(filepath.Base(wd)) {
 		t.Errorf("got %q", got)
+	}
+}
+
+// setupProjects 建立假 HOME 與對照設定檔，回傳 HOME 路徑。
+func setupProjects(t *testing.T, cfg string) string {
+	t.Helper()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "projects.json")
+	if cfg != "" {
+		if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv(ProjectsEnv, path)
+	return home
+}
+
+func mkdirs(t *testing.T, dirs ...string) {
+	t.Helper()
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+const testPrefixes = `{"prefixes": {"~/Tyche/Infinite": "Infinite", "~/Tyche/Infinite/gem": "gem", "~/Tyche/Kairos": "kairos"}}`
+
+func TestProjectPrefixSubdir(t *testing.T) {
+	home := setupProjects(t, testPrefixes)
+	cases := map[string]string{
+		filepath.Join(home, "Tyche/Infinite"):                 "infinite",
+		filepath.Join(home, "Tyche/Infinite/infinite/old-bi"): "infinite",
+		filepath.Join(home, "Tyche/Infinite/docs"):            "infinite",
+		filepath.Join(home, "Tyche/Kairos/sub"):               "kairos",
+	}
+	for cwd, want := range cases {
+		mkdirs(t, cwd)
+		if got := Project(cwd); got != want {
+			t.Errorf("Project(%q) = %q, want %q", cwd, got, want)
+		}
+	}
+}
+
+func TestProjectLongestPrefix(t *testing.T) {
+	home := setupProjects(t, testPrefixes)
+	cwd := filepath.Join(home, "Tyche/Infinite/gem/game-server")
+	mkdirs(t, cwd)
+	if got := Project(cwd); got != "gem" {
+		t.Errorf("got %q, want gem", got)
+	}
+}
+
+func TestProjectComponentBoundary(t *testing.T) {
+	home := setupProjects(t, testPrefixes)
+	cwd := filepath.Join(home, "Tyche/Infinite2")
+	mkdirs(t, cwd)
+	if got := Project(cwd); got != "infinite2" {
+		t.Errorf("got %q, want infinite2", got)
+	}
+}
+
+func TestProjectTildeExpandNonexistentCwd(t *testing.T) {
+	home := setupProjects(t, testPrefixes)
+	if got := Project(filepath.Join(home, "Tyche/Kairos/not-created")); got != "kairos" {
+		t.Errorf("got %q, want kairos", got)
+	}
+}
+
+func TestProjectSymlink(t *testing.T) {
+	home := setupProjects(t, testPrefixes)
+	real := filepath.Join(home, "Tyche/Kairos/app")
+	mkdirs(t, real)
+	link := filepath.Join(home, "kairos-link")
+	if err := os.Symlink(filepath.Join(home, "Tyche/Kairos"), link); err != nil {
+		t.Fatal(err)
+	}
+	if got := Project(filepath.Join(link, "app")); got != "kairos" {
+		t.Errorf("cwd via symlink: got %q, want kairos", got)
+	}
+
+	// prefix 本身是 symlink
+	linkHome := setupProjects(t, `{"prefixes": {"~/alias": "aliased"}}`)
+	target := filepath.Join(linkHome, "real/proj")
+	mkdirs(t, target)
+	if err := os.Symlink(filepath.Join(linkHome, "real"), filepath.Join(linkHome, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if got := Project(target); got != "aliased" {
+		t.Errorf("prefix via symlink: got %q, want aliased", got)
+	}
+}
+
+func TestProjectConfigMissing(t *testing.T) {
+	home := setupProjects(t, "")
+	cwd := filepath.Join(home, "Tyche/Infinite/docs")
+	mkdirs(t, cwd)
+	if got := Project(cwd); got != "docs" {
+		t.Errorf("got %q, want docs", got)
+	}
+}
+
+func TestProjectConfigInvalid(t *testing.T) {
+	home := setupProjects(t, `{"prefixes": [`)
+	cwd := filepath.Join(home, "Tyche/Infinite/Docs")
+	mkdirs(t, cwd)
+	if got := Project(cwd); got != "docs" {
+		t.Errorf("got %q, want docs", got)
+	}
+}
+
+func TestProjectHome(t *testing.T) {
+	home := setupProjects(t, testPrefixes)
+	if got := Project(home); got != "home" {
+		t.Errorf("got %q, want home", got)
+	}
+	setupProjects(t, "")
+	if got := Project(os.Getenv("HOME")); got != "home" {
+		t.Errorf("no config: got %q, want home", got)
+	}
+	h := setupProjects(t, `{"prefixes": {"~": "me"}}`)
+	if got := Project(h); got != "me" {
+		t.Errorf("mapped home: got %q, want me", got)
+	}
+}
+
+func TestProjectNoMatchFallback(t *testing.T) {
+	home := setupProjects(t, testPrefixes)
+	cwd := filepath.Join(home, "other/My-Repo")
+	mkdirs(t, cwd)
+	if got := Project(cwd); got != "my-repo" {
+		t.Errorf("got %q, want my-repo", got)
 	}
 }
