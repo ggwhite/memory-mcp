@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -32,7 +34,7 @@ func NewOllamaEmbedder(baseURL, model string) *OllamaEmbedder {
 		baseURL = "http://localhost:11434"
 	}
 	if model == "" {
-		model = "nomic-embed-text"
+		model = "bge-m3"
 	}
 	return &OllamaEmbedder{
 		baseURL: baseURL,
@@ -76,7 +78,8 @@ func (o *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("embed: unexpected status %d", resp.StatusCode)
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		return nil, fmt.Errorf("embed: unexpected status %d (model %s): %s", resp.StatusCode, o.model, strings.TrimSpace(string(msg)))
 	}
 
 	var out embedResponse

@@ -75,7 +75,7 @@ func TestOllamaEmbedderDefaults(t *testing.T) {
 	if e.baseURL != "http://localhost:11434" {
 		t.Fatalf("baseURL = %q, want http://localhost:11434", e.baseURL)
 	}
-	if e.model != "nomic-embed-text" {
-		t.Fatalf("model = %q, want nomic-embed-text", e.model)
+	if e.model != "bge-m3" {
+		t.Fatalf("model = %q, want bge-m3", e.model)
 	}
 }

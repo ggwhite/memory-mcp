@@ -186,10 +186,25 @@ func parseRecallInput(stdin io.Reader) (hook.Input, error) {
 	return in, nil
 }
 
-// recallPrompt 去頭尾空白；太短或 / 開頭回空字串；超過 recallMaxPromptRunes 時取頭尾各半，
+// systemMarkers Claude Code 以 UserPromptSubmit 送進來的系統訊息（背景任務通知、system reminder、
+// 本機指令輸出）開頭標記，內容與使用者提問無關。
+var systemMarkers = []string{"<task-notification", "<system-reminder", "[SYSTEM NOTIFICATION", "<local-command-", "<command-name>"}
+
+// userText 回傳第一個系統訊息標記之前的使用者文字；整則以標記開頭時回空字串。
+func userText(raw string) string {
+	cut := len(raw)
+	for _, m := range systemMarkers {
+		if i := strings.Index(raw, m); i >= 0 && i < cut {
+			cut = i
+		}
+	}
+	return raw[:cut]
+}
+
+// recallPrompt 剝除系統訊息區塊後去頭尾空白；太短或 / 開頭回空字串；超過 recallMaxPromptRunes 時取頭尾各半，
 // 中間以空白分隔，避免頭尾黏成假的 3 字窗口，並回傳頭、尾兩段供查詢詞分配名額。
 func recallPrompt(raw string) (string, []string) {
-	prompt := strings.TrimSpace(raw)
+	prompt := strings.TrimSpace(userText(raw))
 	if utf8.RuneCountInString(prompt) < recallMinRunes || strings.HasPrefix(prompt, "/") {
 		return "", nil
 	}
