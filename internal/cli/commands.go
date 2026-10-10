@@ -128,6 +128,9 @@ var storeCmd = &cobra.Command{
 		typ, _ := cmd.Flags().GetString("type")
 		tags, _ := cmd.Flags().GetString("tags")
 		project, _ := cmd.Flags().GetString("project")
+		if err := db.CheckProject(typ, project); err != nil {
+			return err
+		}
 
 		d, err := openStore()
 		if err != nil {
@@ -615,6 +618,9 @@ var importCmd = &cobra.Command{
 		var memories []db.Memory
 		if err := json.Unmarshal(data, &memories); err != nil {
 			return fmt.Errorf("parse JSON: %w", err)
+		}
+		if err := db.CheckImport(memories); err != nil {
+			return err
 		}
 
 		d, err := openStore()

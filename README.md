@@ -59,7 +59,7 @@ Then add to your `CLAUDE.md` or global instructions:
 
 Store valuable technical knowledge, preferences, and solutions for recall across sessions:
   memory-mcp store -t til "description"
-  memory-mcp store -t feedback --tags tag1,tag2 "preference"
+  memory-mcp store -t feedback --project global --tags tag1,tag2 "preference"
 
 Recall when starting a task or need context:
   memory-mcp search "keyword"
@@ -77,7 +77,7 @@ Recall when starting a task or need context:
 ]}]
 ```
 
-- `context --hook`：以工作目錄 basename（小寫）當 project，注入全域 feedback、專案最近 3 筆 summary、其他 10 筆記憶的索引（上限 6,000 字）。
+- `context --hook`：以工作目錄 basename（小寫）當 project，注入全域 feedback（project=global）、專案 feedback（最多 20 筆）、專案最近 3 筆 summary、其他 til/knowledge 10 筆的索引（上限 6,000 字，超過時從 til/knowledge 開始裁，feedback 最後才裁；`personal-` 開頭的 project 不注入）。
 - `summarize --hook`：背景呼叫 `claude -p --model haiku` 摘要本次 session，存成 `summary`（tag `auto-summary`）。session 中已手動存 summary、或 user 訊息少於 3 則時跳過。log 在 DB 同目錄的 `summarize.log`。
 - 存入內容會刪除 `<private>…</private>` 並遮蔽常見金鑰格式。
 
@@ -91,7 +91,9 @@ Add to `AGENTS.md`, `GEMINI.md`, or equivalent instructions file:
 Store valuable technical knowledge, preferences, and solutions:
   memory-mcp store -t <type> [--tags t1,t2] [--project name] "content"
 
-Types: feedback (preferences), til (solutions), summary (session summaries), knowledge (cross-project knowledge)
+Types: feedback (preferences; project required, use `global` for cross-project rules), til (solutions), summary (session summaries), knowledge (project knowledge)
+
+Session start injects only: feedback with project=global, plus the current project's feedback, summaries and til/knowledge. Memories with an empty project or a `personal-*` project are never injected.
 
 Recall when needed:
   memory-mcp search "keyword"

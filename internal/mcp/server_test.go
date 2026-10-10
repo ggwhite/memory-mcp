@@ -163,3 +163,29 @@ func TestMCPTimeline(t *testing.T) {
 		t.Errorf("timeline = %q", text)
 	}
 }
+
+func TestMCPStoreFeedbackRequiresProject(t *testing.T) {
+	d := testDB(t)
+	s := NewServer(d)
+	result := callTool(t, s, "memory_store", map[string]any{
+		"type":    "feedback",
+		"content": "no project rule",
+	})
+	if !result.IsError {
+		t.Fatalf("feedback without project should be rejected: %v", result.Content)
+	}
+	if text := result.Content[0].(gomcp.TextContent).Text; !strings.Contains(text, "global") {
+		t.Errorf("error should mention global, got %q", text)
+	}
+	if ms, _ := d.List(db.ListOptions{}); len(ms) != 0 {
+		t.Errorf("rejected feedback was stored: %+v", ms)
+	}
+
+	result = callTool(t, s, "memory_store", map[string]any{
+		"type":    "summary",
+		"content": "session summary",
+	})
+	if result.IsError {
+		t.Fatalf("summary without project should succeed: %v", result.Content)
+	}
+}
