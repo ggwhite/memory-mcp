@@ -43,6 +43,10 @@ func (s *Server) Handler() http.Handler {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
+		if err := db.CheckProject(mem.Type, mem.Project); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
 		id, err := s.store.Store(&mem)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
@@ -190,6 +194,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/import", func(w http.ResponseWriter, r *http.Request) {
 		var memories []db.Memory
 		if err := json.NewDecoder(r.Body).Decode(&memories); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := db.CheckImport(memories); err != nil {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}

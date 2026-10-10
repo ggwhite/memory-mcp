@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -11,6 +12,27 @@ const RedactedMark = "[REDACTED]"
 
 // ErrEmptyAfterSanitize 過濾後內容為空，不寫入。
 var ErrEmptyAfterSanitize = errors.New("content empty after sanitize")
+
+// ErrFeedbackNeedsProject feedback 未指定 project，不寫入。
+var ErrFeedbackNeedsProject = errors.New("feedback 必須指定 project，全域規則用 global")
+
+// CheckProject feedback 一律要有 project，避免空 project 被當成全域規則注入。
+func CheckProject(typ, project string) error {
+	if typ == "feedback" && strings.TrimSpace(project) == "" {
+		return ErrFeedbackNeedsProject
+	}
+	return nil
+}
+
+// CheckImport 對每筆跑 CheckProject，任一筆不合格就整批拒絕，錯誤標出第幾筆（從 1 起算）。
+func CheckImport(memories []Memory) error {
+	for i, m := range memories {
+		if err := CheckProject(m.Type, m.Project); err != nil {
+			return fmt.Errorf("第 %d 筆：%w", i+1, err)
+		}
+	}
+	return nil
+}
 
 var privateBlock = regexp.MustCompile(`(?is)<private>.*?</private>`)
 

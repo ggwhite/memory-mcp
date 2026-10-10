@@ -45,6 +45,9 @@ func (s *Server) handleStore(_ context.Context, req gomcp.CallToolRequest) (*gom
 		Tags:    req.GetString("tags", ""),
 		Project: req.GetString("project", ""),
 	}
+	if err := db.CheckProject(mem.Type, mem.Project); err != nil {
+		return errResult(err), nil
+	}
 	id, err := s.db.Store(mem)
 	if err != nil {
 		return errResult(err), nil
@@ -226,7 +229,7 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	), s.handleDelete)
 
 	srv.AddTool(gomcp.NewTool("memory_context",
-		gomcp.WithDescription("Get an index of recent memories (one line each, 120-char snippet). With project and no type: global feedback + that project's latest summaries + other memories. Use at the START of a session or when switching projects; then call memory_get for full content."),
+		gomcp.WithDescription("Get an index of recent memories (one line each, 120-char snippet). With project and no type: global feedback (project=global) + that project's feedback + latest summaries + til/knowledge. Use at the START of a session or when switching projects; then call memory_get for full content."),
 		gomcp.WithString("type", gomcp.Description("Filter by type: feedback, til, summary, knowledge")),
 		gomcp.WithString("project", gomcp.Description("Project name (lowercase basename of the working directory)")),
 		gomcp.WithNumber("limit", gomcp.Description("Max memories when not in project mode (default 20)")),

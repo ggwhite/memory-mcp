@@ -421,7 +421,7 @@ func (d *DB) Stats() (*Stats, error) {
 	return s, nil
 }
 
-// ContextOptions 摘要查詢參數。Project 有值且 Type 為空時輸出專案三段式索引。
+// ContextOptions 摘要查詢參數。Project 有值且 Type 為空時輸出專案分段索引。
 type ContextOptions struct {
 	Type    string
 	Project string
@@ -430,9 +430,10 @@ type ContextOptions struct {
 }
 
 const (
-	contextSnippetRunes = 120
-	contextBudgetRunes  = 6000
-	contextFooter       = "全文用 memory_get(ids)，前後脈絡用 memory_timeline(id)。"
+	contextSnippetRunes   = 120
+	contextBudgetRunes    = 6000
+	personalProjectPrefix = "personal-"
+	contextFooter         = "全文用 memory_get(ids)，前後脈絡用 memory_timeline(id)。"
 )
 
 // Context 產生 bounded 的記憶摘要。
@@ -515,22 +516,32 @@ type contextSection struct {
 	lines []string
 }
 
-// projectContext 專案三段式索引：全域 feedback、專案 summary、專案其他記憶。
+// projectContext 專案索引：全域 feedback、專案 feedback、專案 summary、專案其他記憶。
+// 段落順序即裁切優先序（fitBudget 從最後一段裁起），feedback 放前面確保最後才被裁。
+// personal- 開頭的 project 是個人記憶，不注入任何專案段。
 func (d *DB) projectContext(project string) (string, error) {
 	global, err := d.queryMemories(selectMemoryCols +
-		` WHERE type = 'feedback' AND project IN ('', 'global') ORDER BY created DESC, id DESC LIMIT 10`)
+		` WHERE type = 'feedback' AND project = 'global' ORDER BY created DESC, id DESC LIMIT 10`)
 	if err != nil {
 		return "", fmt.Errorf("context global: %w", err)
 	}
-	summaries, err := d.queryMemories(selectMemoryCols+
-		` WHERE type = 'summary' AND project = ? ORDER BY created DESC, id DESC LIMIT 3`, project)
-	if err != nil {
-		return "", fmt.Errorf("context summary: %w", err)
-	}
-	others, err := d.queryMemories(selectMemoryCols+
-		` WHERE type IN ('til', 'knowledge', 'feedback') AND project = ? ORDER BY created DESC, id DESC LIMIT 10`, project)
-	if err != nil {
-		return "", fmt.Errorf("context others: %w", err)
+	var feedback, summaries, others []Memory
+	if !strings.HasPrefix(project, personalProjectPrefix) {
+		feedback, err = d.queryMemories(selectMemoryCols+
+			` WHERE type = 'feedback' AND project = ? ORDER BY created DESC, id DESC LIMIT 20`, project)
+		if err != nil {
+			return "", fmt.Errorf("context feedback: %w", err)
+		}
+		summaries, err = d.queryMemories(selectMemoryCols+
+			` WHERE type = 'summary' AND project = ? ORDER BY created DESC, id DESC LIMIT 3`, project)
+		if err != nil {
+			return "", fmt.Errorf("context summary: %w", err)
+		}
+		others, err = d.queryMemories(selectMemoryCols+
+			` WHERE type IN ('til', 'knowledge') AND project = ? ORDER BY created DESC, id DESC LIMIT 10`, project)
+		if err != nil {
+			return "", fmt.Errorf("context others: %w", err)
+		}
 	}
 
 	seen := make(map[int64]bool)
@@ -547,6 +558,7 @@ func (d *DB) projectContext(project string) (string, error) {
 	}
 	sections := []contextSection{
 		{"### 全域 feedback", toLines(global)},
+		{fmt.Sprintf("### %s feedback", project), toLines(feedback)},
 		{fmt.Sprintf("### %s summary", project), toLines(summaries)},
 		{fmt.Sprintf("### %s 其他記憶", project), toLines(others)},
 	}
