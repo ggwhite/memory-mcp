@@ -71,6 +71,9 @@ func printJSON(v any) error {
 	return enc.Encode(v)
 }
 
+// version 由 build 時的 -ldflags "-X github.com/ggwhite/memory-mcp/internal/cli.version=..." 注入。
+var version = "dev"
+
 var rootCmd = &cobra.Command{
 	Use:   "memory-mcp",
 	Short: "Cross-session persistent memory for AI coding agents",
@@ -78,6 +81,7 @@ var rootCmd = &cobra.Command{
 
 // Execute 執行 CLI root command。
 func Execute() error {
+	rootCmd.Version = version
 	return rootCmd.Execute()
 }
 

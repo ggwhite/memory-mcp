@@ -244,7 +244,7 @@ memory-mcp reindex      # backfill embeddings for existing memories; safe to re-
 ## Development
 
 ```bash
-make build   # go build -o bin/memory-mcp .
+make build   # go build -o bin/memory-mcp . (version from git describe)
 make test    # go test ./...
 make lint    # go vet ./...
 ```

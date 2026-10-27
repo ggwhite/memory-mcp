@@ -1,7 +1,9 @@
 .PHONY: build test lint clean
 
+VERSION ?= $(shell git describe --tags --always --dirty)
+
 build:
-	go build -o bin/memory-mcp .
+	go build -ldflags "-X github.com/ggwhite/memory-mcp/internal/cli.version=$(VERSION)" -o bin/memory-mcp .
 
 test:
 	go test ./...
