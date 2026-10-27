@@ -69,10 +69,10 @@ const testPrefixes = `{"prefixes": {"~/work/Acme": "Acme", "~/work/Acme/svc": "s
 func TestProjectPrefixSubdir(t *testing.T) {
 	home := setupProjects(t, testPrefixes)
 	cases := map[string]string{
-		filepath.Join(home, "work/Acme"):                 "acme",
+		filepath.Join(home, "work/Acme"):             "acme",
 		filepath.Join(home, "work/Acme/acme/legacy"): "acme",
-		filepath.Join(home, "work/Acme/docs"):            "acme",
-		filepath.Join(home, "work/Globex/sub"):               "globex",
+		filepath.Join(home, "work/Acme/docs"):        "acme",
+		filepath.Join(home, "work/Globex/sub"):       "globex",
 	}
 	for cwd, want := range cases {
 		mkdirs(t, cwd)
@@ -87,7 +87,7 @@ func TestProjectLongestPrefix(t *testing.T) {
 	cwd := filepath.Join(home, "work/Acme/svc/api")
 	mkdirs(t, cwd)
 	if got := Project(cwd); got != "svc" {
-		t.Errorf("got %q, want gem", got)
+		t.Errorf("got %q, want svc", got)
 	}
 }
 

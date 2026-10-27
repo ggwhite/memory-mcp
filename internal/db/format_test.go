@@ -19,9 +19,9 @@ func TestSnippet(t *testing.T) {
 }
 
 func TestCompactLine(t *testing.T) {
-	m := Memory{ID: 7, Type: "til", Project: "globex", Content: "hello world",
+	m := Memory{ID: 7, Type: "til", Project: "proj-a", Content: "hello world",
 		Created: time.Date(2026, 9, 27, 1, 0, 0, 0, time.UTC)}
-	if got := CompactLine(m, 5, true); got != "- #7 til globex 2026-09-27 hello…" {
+	if got := CompactLine(m, 5, true); got != "- #7 til proj-a 2026-09-27 hello…" {
 		t.Errorf("got %q", got)
 	}
 	if got := CompactLine(m, 80, false); got != "- #7 til 2026-09-27 hello world" {

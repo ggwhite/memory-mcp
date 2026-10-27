@@ -52,7 +52,7 @@ func TestWalkExclusions(t *testing.T) {
 	}
 	got := rels(es)
 	sort.Strings(got)
-	want := []string{"社團/積分表/規則說明.md", "旅遊/露營車改車全攻略.md", "料理/咖哩筆記.md", "園藝/澆水與施肥.md", "追劇/海港小鎮日常記.md", "追劇/雲夢記.md"}
+	want := []string{"園藝/澆水與施肥.md", "料理/咖哩筆記.md", "旅遊/露營車改車全攻略.md", "社團/積分表/規則說明.md", "追劇/海港小鎮日常記.md", "追劇/雲夢記.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v\nwant %v", got, want)
 	}
@@ -76,9 +76,9 @@ func TestMatch(t *testing.T) {
 	root := writeVault(t, testFiles...)
 	cases := map[string][]string{
 		"雲夢記看到第幾季了":     {"追劇/雲夢記.md"},
-		"積分表這週點數怎麼算":    {"社團/積分表/規則說明.md"}, // 目錄名命中
+		"積分表這週分數怎麼算":    {"社團/積分表/規則說明.md"}, // 目錄名命中
 		"露營車的準備還差什麼":    {"旅遊/露營車改車全攻略.md"},
-		"咖哩要不要加辣":     {"料理/咖哩筆記.md"},
+		"咖哩筆記要不要調整":     {"料理/咖哩筆記.md"},
 		"陽台澆水跟施肥量要怎麼安排": {"園藝/澆水與施肥.md"}, // 只靠 2 字詞但幾乎全覆蓋
 		"今天天氣如何":        nil,
 		"幫我寫個 README":   nil,
@@ -97,7 +97,7 @@ func TestMatch(t *testing.T) {
 
 func TestMatchLimitAndStemFirst(t *testing.T) {
 	root := writeVault(t, "積分表/a.md", "積分表/b.md", "積分表/c.md", "社團/積分表說明.md")
-	got := match(t, root, "積分表這週點數怎麼算", nil)
+	got := match(t, root, "積分表這週分數怎麼算", nil)
 	if len(got) != 2 || got[0] != "社團/積分表說明.md" {
 		t.Errorf("got %v, want stem match first and 2 results", got)
 	}

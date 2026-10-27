@@ -48,9 +48,9 @@ func setupRecall(t *testing.T) recallEnv {
 	}
 	mems := []db.Memory{
 		{Type: "knowledge", Project: "work", Content: "305-qa 年度報稅匯出卡在上傳中，訪客量暴增導致查詢逾時"},
-		{Type: "summary", Project: "personal-hobby", Content: "積分表第一週點數已填進積分紀錄"},
+		{Type: "summary", Project: "personal-hobby", Content: "積分表第一週分數已填進積分紀錄"},
 		// 次名分數約第一名 55%：首次不過比例門檻，#1 去重後也不能浮上來
-		{Type: "til", Project: "work", Content: "201-ds 客服單：分層名單與玩家導出 卡住，另見同日處理紀錄"},
+		{Type: "til", Project: "work", Content: "201-ds 客服單：年度名單與報稅匯出 卡住，另見同日處理紀錄"},
 	}
 	for i := 0; i < 1200; i++ {
 		mems = append(mems, db.Memory{Type: "til", Project: "noise", Content: fmt.Sprintf("無關的填充內容第 %d 筆", i)})
@@ -98,7 +98,7 @@ func TestRecallHookSkipsContextInjected(t *testing.T) {
 
 func TestRecallHookPersonalScope(t *testing.T) {
 	env := setupRecall(t)
-	prompt := "積分表這週點數怎麼算"
+	prompt := "積分表這週分數怎麼算"
 	if out, _ := runRecall(env, hookJSON("a", env.work, prompt), time.Second); strings.Contains(out, "personal-") {
 		t.Errorf("registered project should exclude personal-*, got %q", out)
 	}
@@ -177,7 +177,7 @@ func TestRecallHookNotes(t *testing.T) {
 		t.Errorf("registered project must not match notes, got %q", out3)
 	}
 	// 記憶行在前、筆記行在後
-	out4, _ := runRecall(env, hookJSON("n3", env.free, "積分表這週點數怎麼算"), time.Second)
+	out4, _ := runRecall(env, hookJSON("n3", env.free, "積分表這週分數怎麼算"), time.Second)
 	mi, ni := strings.Index(out4, "- #2 "), strings.Index(out4, "- 筆記 "+vault+"/社團/積分表/規則說明.md")
 	if mi < 0 || ni < 0 || mi > ni {
 		t.Errorf("want memory line before note line, got %q", out4)

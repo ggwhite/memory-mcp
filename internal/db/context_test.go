@@ -11,23 +11,23 @@ func TestProjectContextSections(t *testing.T) {
 	d := testDB(t)
 	d.Store(&Memory{Type: "feedback", Content: "global pref"})
 	d.Store(&Memory{Type: "feedback", Content: "global tagged", Project: "global"})
-	d.Store(&Memory{Type: "feedback", Content: "other project pref", Project: "widget"})
+	d.Store(&Memory{Type: "feedback", Content: "other project pref", Project: "proj-b"})
 	for i := 0; i < 4; i++ {
-		d.Store(&Memory{Type: "summary", Content: "sum", Project: "globex"})
+		d.Store(&Memory{Type: "summary", Content: "sum", Project: "proj-a"})
 	}
-	d.Store(&Memory{Type: "til", Content: "globex til", Project: "globex"})
-	d.Store(&Memory{Type: "til", Content: "widget til", Project: "widget"})
+	d.Store(&Memory{Type: "til", Content: "proj-a til", Project: "proj-a"})
+	d.Store(&Memory{Type: "til", Content: "proj-b til", Project: "proj-b"})
 
-	out, err := d.Context(ContextOptions{Project: "globex"})
+	out, err := d.Context(ContextOptions{Project: "proj-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"### 全域 feedback", "global tagged", "### globex summary", "### globex 其他記憶", "globex til", "memory_get", "tokens)"} {
+	for _, want := range []string{"### 全域 feedback", "global tagged", "### proj-a summary", "### proj-a 其他記憶", "proj-a til", "memory_get", "tokens)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	for _, bad := range []string{"global pref", "other project pref", "widget til"} {
+	for _, bad := range []string{"global pref", "other project pref", "proj-b til"} {
 		if strings.Contains(out, bad) {
 			t.Errorf("unexpected %q in:\n%s", bad, out)
 		}
@@ -104,9 +104,9 @@ func TestProjectContextEmptyProjectFeedbackNotGlobal(t *testing.T) {
 	d := testDB(t)
 	d.Store(&Memory{Type: "feedback", Content: "english lesson note"})
 	d.Store(&Memory{Type: "feedback", Content: "real global rule", Project: "global"})
-	d.Store(&Memory{Type: "til", Content: "globex til", Project: "globex"})
+	d.Store(&Memory{Type: "til", Content: "proj-a til", Project: "proj-a"})
 
-	out, err := d.Context(ContextOptions{Project: "globex"})
+	out, err := d.Context(ContextOptions{Project: "proj-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestProjectContextExcludesPersonal(t *testing.T) {
 	d.Store(&Memory{Type: "summary", Content: "personal summary", Project: "personal-x"})
 	d.Store(&Memory{Type: "til", Content: "personal til", Project: "personal-x"})
 
-	for _, project := range []string{"globex", "personal-x"} {
+	for _, project := range []string{"proj-a", "personal-x"} {
 		out, err := d.Context(ContextOptions{Project: project})
 		if err != nil {
 			t.Fatal(err)
@@ -221,9 +221,9 @@ func TestProjectContextHomeOnlyGlobal(t *testing.T) {
 	}
 
 	// 對照：一般 project 仍注入專案段
-	d.Store(&Memory{Type: "til", Content: "globex til", Project: "globex"})
-	out, _ = d.Context(ContextOptions{Project: "globex"})
-	if !strings.Contains(out, "globex til") {
+	d.Store(&Memory{Type: "til", Content: "proj-a til", Project: "proj-a"})
+	out, _ = d.Context(ContextOptions{Project: "proj-a"})
+	if !strings.Contains(out, "proj-a til") {
 		t.Errorf("non-home project should keep project sections:\n%s", out)
 	}
 }

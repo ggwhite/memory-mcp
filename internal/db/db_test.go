@@ -57,7 +57,7 @@ func TestGet(t *testing.T) {
 		Type:    "feedback",
 		Content: "use real DB for tests",
 		Tags:    "testing",
-		Project: "globex",
+		Project: "proj-a",
 	})
 
 	m, err := d.Get(id)
@@ -73,8 +73,8 @@ func TestGet(t *testing.T) {
 	if m.Tags != "testing" {
 		t.Fatalf("tags = %q, want %q", m.Tags, "testing")
 	}
-	if m.Project != "globex" {
-		t.Fatalf("project = %q, want %q", m.Project, "globex")
+	if m.Project != "proj-a" {
+		t.Fatalf("project = %q, want %q", m.Project, "proj-a")
 	}
 	if m.Created.IsZero() {
 		t.Fatal("created should not be zero")

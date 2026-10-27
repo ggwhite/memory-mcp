@@ -25,9 +25,9 @@ func TestRecallTerms(t *testing.T) {
 }
 
 func TestScoreUnits(t *testing.T) {
-	segs := recallSegments("積分表這週點數怎麼算")
-	// 積分表（3 字詞）與 點數（2 字詞）在訊息中不相連 → 2 個片段，2 字詞加分一次
-	units, bonus := scoreUnits(segs, "積分表 v26：功課點數改看行為")
+	segs := recallSegments("積分表這週分數怎麼算")
+	// 積分表（3 字詞）與 分數（2 字詞）在訊息中不相連 → 2 個片段，2 字詞加分一次
+	units, bonus := scoreUnits(segs, "積分表 v26：功課分數改看行為")
 	if units != 2 || bonus != recallBigramWeight {
 		t.Errorf("units=%d bonus=%v, want 2 and %v", units, bonus, recallBigramWeight)
 	}
@@ -43,7 +43,7 @@ func seedRecall(t *testing.T) *DB {
 	d := testDB(t)
 	mems := []Memory{
 		{Type: "knowledge", Project: "acme", Content: "305-qa 年度報稅匯出卡在上傳中，根因是訪客量暴增，導出查詢逾時"},
-		{Type: "summary", Project: "personal-hobby", Content: "積分表第一週點數已填進積分紀錄，小明 19 分、小華 14 分"},
+		{Type: "summary", Project: "personal-hobby", Content: "積分表第一週分數已填進積分紀錄，小明 19 分、小華 14 分"},
 		{Type: "til", Project: "other", Content: "Hangar tag retention 把 git tag 清掉，docker compose pull 失敗"},
 		{Type: "til", Project: "acme", Content: "Hangar tag retention 規則修正後 docker compose pull 恢復"},
 		{Type: "til", Project: "other", Content: "重構程式碼時記得補測試"}, // 只命中一個片段，不該過門檻
@@ -96,7 +96,7 @@ func TestRecallHitsAndThreshold(t *testing.T) {
 
 func TestRecallExcludePersonal(t *testing.T) {
 	d := seedRecall(t)
-	prompt := "積分表這週點數怎麼算"
+	prompt := "積分表這週分數怎麼算"
 	if ids := recallIDs(t, d, RecallOptions{Prompt: prompt}); !reflect.DeepEqual(ids, []int64{2}) {
 		t.Errorf("without exclusion: got %v, want [2]", ids)
 	}
@@ -148,7 +148,7 @@ func TestPromptTermsCoverage(t *testing.T) {
 // 兩個候選：次名約第一名 50%～60% 分數，排除第一名後次名不能因比例門檻改用自己當基準而浮上來。
 const (
 	dedupeTop    = "305-qa 年度報稅匯出卡在上傳中，訪客量暴增導致查詢逾時"
-	dedupeSecond = "201-ds 客服單：分層名單與玩家導出 卡住"
+	dedupeSecond = "201-ds 客服單：年度名單與報稅匯出 卡住"
 	dedupePrompt = "305-qa 年度報稅匯出又卡住了"
 )
 
