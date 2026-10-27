@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/db"
 )
 
 // RootEnv 覆寫 vault 根目錄（預設 ~/ob）。

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/db"
 )
 
 func writeVault(t *testing.T, files ...string) string {

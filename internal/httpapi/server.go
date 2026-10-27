@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/db"
 )
 
 // Server 把 db.Store 包成 HTTP handler。

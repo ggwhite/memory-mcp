@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"memory-mcp/internal/embed"
+	"github.com/ggwhite/memory-mcp/internal/embed"
 
 	_ "modernc.org/sqlite"
 )

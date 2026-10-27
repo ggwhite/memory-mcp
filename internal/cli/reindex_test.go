@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/db"
 )
 
 // fakeOllama 對內容在 fail 集合內的請求回 404 model not found，其餘回固定向量。

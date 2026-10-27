@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/db"
 )
 
 func testClient(t *testing.T) (*Client, *db.DB) {

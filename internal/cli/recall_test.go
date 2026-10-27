@@ -13,9 +13,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"memory-mcp/internal/db"
-	"memory-mcp/internal/hook"
-	"memory-mcp/internal/obnote"
+	"github.com/ggwhite/memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/hook"
+	"github.com/ggwhite/memory-mcp/internal/obnote"
 )
 
 type recallEnv struct {

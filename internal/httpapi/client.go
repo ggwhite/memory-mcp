@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/db"
 )
 
 // Client 實作 db.Store，把每個操作轉發到遠端 memory-mcp REST API。

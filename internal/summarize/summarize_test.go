@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"memory-mcp/internal/db"
-	"memory-mcp/internal/hook"
+	"github.com/ggwhite/memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/hook"
 )
 
 const fixture = `{"type":"mode","sessionId":"s"}

@@ -1,4 +1,4 @@
-module memory-mcp
+module github.com/ggwhite/memory-mcp
 
 go 1.26.4
 

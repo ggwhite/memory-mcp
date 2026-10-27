@@ -14,12 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"memory-mcp/internal/db"
-	"memory-mcp/internal/embed"
-	"memory-mcp/internal/hook"
-	"memory-mcp/internal/httpapi"
-	memcp "memory-mcp/internal/mcp"
-	"memory-mcp/internal/summarize"
+	"github.com/ggwhite/memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/embed"
+	"github.com/ggwhite/memory-mcp/internal/hook"
+	"github.com/ggwhite/memory-mcp/internal/httpapi"
+	memcp "github.com/ggwhite/memory-mcp/internal/mcp"
+	"github.com/ggwhite/memory-mcp/internal/summarize"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"

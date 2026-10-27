@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"memory-mcp/internal/cli"
+	"github.com/ggwhite/memory-mcp/internal/cli"
 )
 
 func main() {
