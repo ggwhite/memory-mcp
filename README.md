@@ -1,5 +1,8 @@
 # memory-mcp
 
+[![CI](https://github.com/ggwhite/memory-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ggwhite/memory-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Cross-session persistent memory for AI coding agents — one Go binary, one SQLite file, usable from the CLI, as an MCP server, and from Claude Code hooks.
 
 ![demo](demo.gif)
@@ -49,7 +52,21 @@ Requires Go 1.26.4 or newer (see `go.mod`).
 go install github.com/ggwhite/memory-mcp@latest
 ```
 
-Prebuilt binaries: see the [Releases](https://github.com/ggwhite/memory-mcp/releases) page (coming soon).
+Prebuilt binaries (macOS and Linux, amd64/arm64) are on the [Releases](https://github.com/ggwhite/memory-mcp/releases) page:
+
+```bash
+# pick the archive for your OS/arch, e.g. darwin_arm64
+tar xzf memory-mcp_<version>_darwin_arm64.tar.gz
+mv memory-mcp ~/.local/bin/   # or any directory on your PATH
+```
+
+The macOS binaries are not signed; if Gatekeeper blocks the binary, clear the quarantine flag:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/memory-mcp
+```
+
+Check the installed version with `memory-mcp --version`.
 
 From source:
 
