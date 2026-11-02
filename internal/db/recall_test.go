@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRecallTerms(t *testing.T) {
@@ -215,5 +216,48 @@ func TestRecallTermsForQuota(t *testing.T) {
 	p := many("xx", 40)
 	if !reflect.DeepEqual(recallTermsFor(p, nil), RecallTerms(p)) {
 		t.Error("unsplit prompt should keep RecallTerms behavior")
+	}
+}
+
+// seedAged 以相同內容存入多筆記憶，created 依 ages（距 recallNow 的天數）回寫。
+func seedAged(t *testing.T, typ string, ages ...int) *DB {
+	t.Helper()
+	d := testDB(t)
+	addNoise(t, d)
+	for _, age := range ages {
+		id, err := d.Store(&Memory{Type: typ, Project: "p", Content: "authsvc legacyToken 漏洞紀錄"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		created := recallNow.AddDate(0, 0, -age).Format(timeLayout)
+		if _, err := d.db.Exec(`UPDATE memories SET created = ? WHERE id = ?`, created, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return d
+}
+
+var recallNow = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+func TestRecallSummaryDecay(t *testing.T) {
+	prompt := "authsvc legacyToken 漏洞"
+	// noise 佔掉前 1200 個 id
+	d := seedAged(t, "summary", 200, 1)
+	if ids := recallIDs(t, d, RecallOptions{Prompt: prompt, Now: recallNow}); !reflect.DeepEqual(ids, []int64{1202, 1201}) {
+		t.Errorf("summary decay: got %v, want [1202 1201]", ids)
+	}
+}
+
+func TestRecallNonSummaryNotDecayed(t *testing.T) {
+	d := seedAged(t, "til", 200, 1)
+	if ids := recallIDs(t, d, RecallOptions{Prompt: "authsvc legacyToken 漏洞", Now: recallNow}); !reflect.DeepEqual(ids, []int64{1201, 1202}) {
+		t.Errorf("til should keep raw order: got %v, want [1201 1202]", ids)
+	}
+}
+
+func TestRecallOldSummaryStillReturned(t *testing.T) {
+	d := seedAged(t, "summary", 400)
+	if ids := recallIDs(t, d, RecallOptions{Prompt: "authsvc legacyToken 漏洞", Now: recallNow}); !reflect.DeepEqual(ids, []int64{1201}) {
+		t.Errorf("old summary: got %v, want [1201]", ids)
 	}
 }

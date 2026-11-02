@@ -36,15 +36,19 @@ func defaultDBPath() string {
 	return filepath.Join(home, ".local", "share", "memory-mcp", "memory.db")
 }
 
+// resolveDBPath 依 --db、MEMORY_MCP_DB、預設路徑的順序決定本機 DB 路徑。
+func resolveDBPath() string {
+	if dbPath != "" {
+		return dbPath
+	}
+	if p := os.Getenv("MEMORY_MCP_DB"); p != "" {
+		return p
+	}
+	return defaultDBPath()
+}
+
 func openDB() (*db.DB, error) {
-	path := dbPath
-	if path == "" {
-		path = os.Getenv("MEMORY_MCP_DB")
-	}
-	if path == "" {
-		path = defaultDBPath()
-	}
-	d, err := db.Open(path)
+	d, err := db.Open(resolveDBPath())
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +90,8 @@ func Execute() error {
 }
 
 func init() {
+	// 錯誤由 main 統一印一次，避免 cobra 再印一份 "Error: ..."。
+	rootCmd.SilenceErrors = true
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", "", "database path (default ~/.local/share/memory-mcp/memory.db)")
 	rootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "output JSON format")
 	rootCmd.PersistentFlags().StringVar(&remoteFlag, "remote", "", "remote memory-mcp REST API URL (e.g. http://127.0.0.1:8766); overrides --db. Also settable via MEMORY_MCP_REMOTE env var")
@@ -94,6 +100,7 @@ func init() {
 	storeCmd.MarkFlagRequired("type")
 	storeCmd.Flags().String("tags", "", "comma-separated tags")
 	storeCmd.Flags().String("project", "", "project name")
+	storeCmd.Flags().String("supersedes", "", "comma-separated ids of older memories this one replaces; they are deleted (fails without storing if any id is missing)")
 
 	searchCmd.Flags().String("type", "", "filter by memory type")
 	searchCmd.Flags().IntP("limit", "n", 5, "max results")
@@ -121,7 +128,7 @@ func init() {
 	summarizeCmd.Flags().String("worker", "", "internal: run summary from saved hook input file")
 	summarizeCmd.Flags().MarkHidden("worker")
 
-	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd, reindexCmd, getCmd, timelineCmd, summarizeCmd)
+	rootCmd.AddCommand(storeCmd, searchCmd, listCmd, deleteCmd, updateCmd, statsCmd, exportCmd, importCmd, serveCmd, contextCmd, reindexCmd, getCmd, timelineCmd, summarizeCmd, compactCmd)
 }
 
 var storeCmd = &cobra.Command{
@@ -135,6 +142,11 @@ var storeCmd = &cobra.Command{
 		if err := db.CheckProject(typ, project); err != nil {
 			return err
 		}
+		supersedesRaw, _ := cmd.Flags().GetString("supersedes")
+		supersedes, err := db.ParseIDs(supersedesRaw)
+		if err != nil {
+			return err
+		}
 
 		d, err := openStore()
 		if err != nil {
@@ -142,7 +154,7 @@ var storeCmd = &cobra.Command{
 		}
 		defer d.Close()
 
-		mem := &db.Memory{Type: typ, Content: args[0], Tags: tags, Project: project}
+		mem := &db.Memory{Type: typ, Content: args[0], Tags: tags, Project: project, Supersedes: supersedes}
 		id, err := d.Store(mem)
 		if err != nil {
 			return err
@@ -151,9 +163,16 @@ var storeCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "已遮蔽 %d 處敏感內容\n", mem.Redacted)
 		}
 		if jsonFlag {
-			return printJSON(map[string]any{"id": id, "redacted": mem.Redacted})
+			out := map[string]any{"id": id, "redacted": mem.Redacted}
+			if len(mem.Supersedes) > 0 {
+				out["deleted"] = mem.Supersedes
+			}
+			return printJSON(out)
 		}
 		fmt.Printf("Stored memory #%d\n", id)
+		for _, old := range mem.Supersedes {
+			fmt.Printf("Deleted superseded memory #%d\n", old)
+		}
 		return nil
 	},
 }

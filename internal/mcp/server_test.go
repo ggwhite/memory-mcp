@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -188,4 +189,112 @@ func TestMCPStoreFeedbackRequiresProject(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("summary without project should succeed: %v", result.Content)
 	}
+}
+
+func TestMCPStoreSupersedes(t *testing.T) {
+	d := testDB(t)
+	a, _ := d.Store(&db.Memory{Type: "feedback", Project: "p", Content: "舊規則"})
+	s := NewServer(d)
+
+	result := callTool(t, s, "memory_store", map[string]any{
+		"type": "feedback", "project": "p", "content": "新規則",
+		"supersedes": []any{float64(a)},
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %v", result.Content)
+	}
+	text := result.Content[0].(gomcp.TextContent).Text
+	if !strings.Contains(text, `"deleted":[1]`) {
+		t.Errorf("result = %s, want deleted ids", text)
+	}
+	if _, err := d.Get(a); err == nil {
+		t.Errorf("#%d should be deleted", a)
+	}
+
+	result = callTool(t, s, "memory_store", map[string]any{
+		"type": "til", "content": "x", "supersedes": []any{float64(999)},
+	})
+	if !result.IsError {
+		t.Fatal("want error for missing superseded id")
+	}
+	if st, _ := d.Stats(); st.Total != 1 {
+		t.Errorf("total = %d, want 1 (nothing stored)", st.Total)
+	}
+}
+
+// supersedes 參數格式不合法時必須回錯誤，且不能先寫入新記憶、也不能刪舊記憶。
+func TestMCPStoreSupersedesInvalid(t *testing.T) {
+	bad := map[string]any{
+		"string":        "12",
+		"nonNumeric":    []any{"abc"},
+		"fraction":      []any{1.5},
+		"object":        map[string]any{"id": 1},
+		"zero":          []any{float64(0)},
+		"negative":      []any{float64(-3)},
+		"mixedBad":      []any{float64(1), "x"},
+		"floatScalar":   1.5,
+		"nullElement":   []any{nil},
+		"boolElement":   []any{true},
+		"numericStrBad": []any{"1.5"},
+	}
+	for name, v := range bad {
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			if _, err := d.Store(&db.Memory{Type: "til", Content: "舊"}); err != nil {
+				t.Fatal(err)
+			}
+			s := NewServer(d)
+			result := callTool(t, s, "memory_store", map[string]any{
+				"type": "til", "content": "新", "supersedes": v,
+			})
+			if !result.IsError {
+				t.Fatalf("want error for supersedes=%#v, got %s", v, resultText(result))
+			}
+			if st, _ := d.Stats(); st.Total != 1 {
+				t.Errorf("total = %d, want 1 (nothing stored)", st.Total)
+			}
+		})
+	}
+}
+
+// supersedes 接受整數陣列、整數字串與單一整數。
+func TestMCPStoreSupersedesAccepted(t *testing.T) {
+	cases := map[string]func(a, b int64) any{
+		"floatArray":  func(a, b int64) any { return []any{float64(a), float64(b)} },
+		"intArray":    func(a, b int64) any { return []any{int(a), int(b)} },
+		"stringArray": func(a, b int64) any { return []any{strconv.FormatInt(a, 10), float64(b)} },
+		"typedInts":   func(a, b int64) any { return []int{int(a), int(b)} },
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			a, _ := d.Store(&db.Memory{Type: "til", Content: "舊 a"})
+			b, _ := d.Store(&db.Memory{Type: "til", Content: "舊 b"})
+			s := NewServer(d)
+			result := callTool(t, s, "memory_store", map[string]any{
+				"type": "til", "content": "新", "supersedes": mk(a, b),
+			})
+			if result.IsError {
+				t.Fatalf("unexpected error: %s", resultText(result))
+			}
+			if st, _ := d.Stats(); st.Total != 1 {
+				t.Errorf("total = %d, want 1", st.Total)
+			}
+		})
+	}
+
+	t.Run("single", func(t *testing.T) {
+		d := testDB(t)
+		a, _ := d.Store(&db.Memory{Type: "til", Content: "舊"})
+		s := NewServer(d)
+		result := callTool(t, s, "memory_store", map[string]any{
+			"type": "til", "content": "新", "supersedes": float64(a),
+		})
+		if result.IsError {
+			t.Fatalf("unexpected error: %s", resultText(result))
+		}
+		if _, err := d.Get(a); err == nil {
+			t.Errorf("#%d should be deleted", a)
+		}
+	})
 }

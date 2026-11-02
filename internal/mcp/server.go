@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/ggwhite/memory-mcp/internal/db"
@@ -37,6 +39,71 @@ func errResult(err error) *gomcp.CallToolResult {
 	return gomcp.NewToolResultError(err.Error())
 }
 
+// parseSupersedes 嚴格解析 supersedes 參數：接受整數陣列或單一整數（數字須為整數，
+// 數字字串也可），其餘（小數、非數字字串、物件、id <= 0）一律回錯誤，避免靜默漏刪舊記憶。
+func parseSupersedes(raw any) ([]int64, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	var items []any
+	switch v := raw.(type) {
+	case []any:
+		items = v
+	case []int:
+		for _, n := range v {
+			items = append(items, n)
+		}
+	case []int64:
+		for _, n := range v {
+			items = append(items, n)
+		}
+	default:
+		items = []any{raw}
+	}
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		id, err := parseSupersedeID(item)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func parseSupersedeID(item any) (int64, error) {
+	var id int64
+	switch n := item.(type) {
+	case float64:
+		if n != math.Trunc(n) || math.IsInf(n, 0) || math.Abs(n) > 1<<53 {
+			return 0, fmt.Errorf("invalid supersedes id %v: must be an integer", n)
+		}
+		id = int64(n)
+	case int:
+		id = int64(n)
+	case int64:
+		id = n
+	case json.Number:
+		v, err := n.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("invalid supersedes id %q: must be an integer", n.String())
+		}
+		id = v
+	case string:
+		v, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid supersedes id %q: must be an integer", n)
+		}
+		id = v
+	default:
+		return 0, fmt.Errorf("invalid supersedes: expected an array of integer ids, got %T", item)
+	}
+	if id <= 0 {
+		return 0, fmt.Errorf("invalid supersedes id %d: must be positive", id)
+	}
+	return id, nil
+}
+
 // handleStore 處理 memory_store tool 呼叫。
 func (s *Server) handleStore(_ context.Context, req gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
 	mem := &db.Memory{
@@ -45,6 +112,11 @@ func (s *Server) handleStore(_ context.Context, req gomcp.CallToolRequest) (*gom
 		Tags:    req.GetString("tags", ""),
 		Project: req.GetString("project", ""),
 	}
+	supersedes, err := parseSupersedes(req.GetArguments()["supersedes"])
+	if err != nil {
+		return errResult(err), nil
+	}
+	mem.Supersedes = supersedes
 	if err := db.CheckProject(mem.Type, mem.Project); err != nil {
 		return errResult(err), nil
 	}
@@ -53,6 +125,9 @@ func (s *Server) handleStore(_ context.Context, req gomcp.CallToolRequest) (*gom
 		return errResult(err), nil
 	}
 	out := map[string]any{"id": id}
+	if len(mem.Supersedes) > 0 {
+		out["deleted"] = mem.Supersedes
+	}
 	if mem.Redacted > 0 {
 		out["redacted"] = mem.Redacted
 		out["note"] = fmt.Sprintf("已遮蔽 %d 處敏感內容", mem.Redacted)
@@ -189,11 +264,12 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	)
 
 	srv.AddTool(gomcp.NewTool("memory_store",
-		gomcp.WithDescription("Persist a piece of knowledge across sessions. Use PROACTIVELY when: you fix a tricky bug (type=til), the user corrects your approach or states a preference (type=feedback), you finish a work session (type=summary), or you discover cross-project architectural knowledge (type=knowledge). Don't wait to be asked — store immediately when something is worth remembering."),
+		gomcp.WithDescription("Persist a piece of knowledge across sessions. Use PROACTIVELY when: you fix a tricky bug (type=til), the user corrects your approach or states a preference (type=feedback), you finish a work session (type=summary), or you discover cross-project architectural knowledge (type=knowledge). Don't wait to be asked — store immediately when something is worth remembering. When this memory replaces older ones (a corrected rule, a newer decision), pass their ids in supersedes so they are deleted."),
 		gomcp.WithString("type", gomcp.Required(), gomcp.Description("feedback=user preferences/corrections, til=technical solutions, summary=session/work summaries, knowledge=cross-project insights")),
 		gomcp.WithString("content", gomcp.Required(), gomcp.Description("Memory content — be specific and self-contained so it's useful without context")),
 		gomcp.WithString("tags", gomcp.Description("Comma-separated tags for categorization")),
 		gomcp.WithString("project", gomcp.Description("Project name for scoping")),
+		gomcp.WithArray("supersedes", gomcp.WithIntegerItems(), gomcp.Description("Ids of older memories this one replaces (a corrected rule, a newer decision); they are deleted. If any id doesn't exist, nothing is stored")),
 	), s.handleStore)
 
 	srv.AddTool(gomcp.NewTool("memory_search",

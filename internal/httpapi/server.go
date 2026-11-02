@@ -6,6 +6,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -48,11 +49,19 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		id, err := s.store.Store(&mem)
+		if errors.Is(err, db.ErrSupersededNotFound) {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]int64{"id": id, "redacted": int64(mem.Redacted)})
+		out := map[string]any{"id": id, "redacted": mem.Redacted}
+		if len(mem.Supersedes) > 0 {
+			out["deleted"] = mem.Supersedes
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 
 	mux.HandleFunc("GET /v1/memories", func(w http.ResponseWriter, r *http.Request) {

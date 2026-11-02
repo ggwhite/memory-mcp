@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="480" viewBox="0 0 1100 480" role="img" aria-labelledby="title desc">
+<title id="title">memory-mcp architecture</title>
+<desc id="desc">CLI, MCP server and Claude Code hooks call a common db.Store interface, backed locally by internal/db over SQLite (FTS5 trigram plus embeddings), or with --remote by a REST client talking to serve --http-api on another host. Ollama is optional and provides embeddings.</desc>
+<style>
+  .sans { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .t  { fill: #1F2328; }
+  .m  { fill: #59636E; }
+  .a  { fill: #5B4BDB; }
+  .oa { fill: #FFFFFF; }
+  .b  { font-weight: 600; }
+  .cap { font-size: 14px; letter-spacing: 1.2px; font-weight: 600; }
+</style>
+<defs>
+  <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+    <path d="M0,1 L9,5 L0,9 Z" fill="#59636E"/>
+  </marker>
+  <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+    <path d="M0,1 L9,5 L0,9 Z" fill="#5B4BDB"/>
+  </marker>
+</defs>
+<rect width="1100" height="480" fill="#FFFFFF"/>
+<text x="40" y="44" class="sans m cap" font-size="16" text-anchor="start">FRONT-ENDS</text>
+<text x="330" y="44" class="sans m cap" font-size="16" text-anchor="start">INTERFACE</text>
+<text x="590" y="44" class="sans m cap" font-size="16" text-anchor="start">ENGINE</text>
+<text x="850" y="44" class="sans m cap" font-size="16" text-anchor="start">STORAGE</text>
+<rect x="40" y="70" width="220" height="72" rx="10" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="1.5"/>
+<text x="60" y="101" class="sans t b" font-size="17" text-anchor="start">CLI</text>
+<text x="60" y="124" class="sans m" font-size="14" text-anchor="start">store · search · list …</text>
+<rect x="40" y="160" width="220" height="72" rx="10" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="1.5"/>
+<text x="60" y="191" class="sans t b" font-size="17" text-anchor="start">MCP server</text>
+<text x="60" y="214" class="sans m" font-size="14" text-anchor="start">stdio · Streamable HTTP</text>
+<rect x="40" y="250" width="220" height="72" rx="10" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="1.5"/>
+<text x="60" y="281" class="sans t b" font-size="17" text-anchor="start">Claude Code hooks</text>
+<text x="60" y="304" class="sans m" font-size="14" text-anchor="start">context · recall · summarize</text>
+<path d="M260,106 H295" fill="none" stroke="#59636E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M260,196 H295" fill="none" stroke="#59636E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M260,286 H295" fill="none" stroke="#59636E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M295,106 V286" fill="none" stroke="#59636E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M295,196 H328" fill="none" stroke="#59636E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#ah)"/>
+<rect x="330" y="148" width="180" height="96" rx="10" fill="#EFEDFF" stroke="#C4BCF5" stroke-width="1.5"/>
+<text x="420" y="190" class="mono a b" font-size="19" text-anchor="middle">db.Store</text>
+<text x="420" y="214" class="sans m" font-size="14" text-anchor="middle">Go interface</text>
+<path d="M510,196 H588" fill="none" stroke="#5B4BDB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#aha)"/>
+<text x="549" y="184" class="sans m" font-size="14" text-anchor="middle">local</text>
+<rect x="590" y="148" width="180" height="96" rx="10" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="1.5"/>
+<text x="680" y="190" class="mono t b" font-size="18" text-anchor="middle">internal/db</text>
+<text x="680" y="214" class="sans m" font-size="14" text-anchor="middle">redact · search · RRF</text>
+<path d="M770,196 H848" fill="none" stroke="#5B4BDB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#aha)"/>
+<path d="M850,108 A105.0,14 0 0 1 1060,108 V292 A105.0,14 0 0 1 850,292 Z" fill="#EFEDFF" stroke="#C4BCF5" stroke-width="1.5"/>
+<path d="M850,108 A105.0,14 0 0 0 1060,108" fill="none" stroke="#C4BCF5" stroke-width="1.5"/>
+<text x="955.0" y="158" class="sans t b" font-size="19" text-anchor="middle">SQLite</text>
+<text x="955.0" y="181" class="mono m" font-size="14" text-anchor="middle">memory.db · WAL</text>
+<rect x="880.0" y="198" width="150" height="28" rx="14.0" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="1.5"/>
+<text x="955.0" y="217.04" class="sans a" font-size="14" text-anchor="middle">FTS5 trigram</text>
+<rect x="880.0" y="238" width="150" height="28" rx="14.0" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="1.5"/>
+<text x="955.0" y="257.04" class="sans a" font-size="14" text-anchor="middle">embeddings</text>
+<path d="M420,244 V348" fill="none" stroke="#5B4BDB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#aha)"/>
+<text x="432" y="302" class="mono a b" font-size="14" text-anchor="start">--remote</text>
+<rect x="330" y="350" width="180" height="72" rx="10" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="1.5"/>
+<text x="420" y="381" class="sans t b" font-size="17" text-anchor="middle">REST client</text>
+<text x="420" y="404" class="sans m" font-size="14" text-anchor="middle">same Store API</text>
+<path d="M510,386 H588" fill="none" stroke="#5B4BDB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#aha)"/>
+<text x="549" y="374" class="mono m" font-size="14" text-anchor="middle">HTTP</text>
+<rect x="590" y="350" width="180" height="72" rx="10" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="1.5"/>
+<text x="680" y="381" class="mono t b" font-size="15" text-anchor="middle">serve --http-api</text>
+<text x="680" y="404" class="sans m" font-size="14" text-anchor="middle">on the central host</text>
+<path d="M680,350 V246" fill="none" stroke="#5B4BDB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#aha)"/>
+<rect x="850" y="350" width="210" height="72" rx="10" fill="#FFFFFF" stroke="#59636E" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="955" y="381" class="sans t b" font-size="17" text-anchor="middle">Ollama</text>
+<text x="955" y="404" class="sans m" font-size="14" text-anchor="middle">optional · embeddings</text>
+<path d="M770,226 H810 V386 H848" fill="none" stroke="#59636E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#ah)"/>
+<path d="M40,384 H84" fill="none" stroke="#5B4BDB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#aha)"/>
+<text x="96" y="389" class="sans m" font-size="14" text-anchor="start">data path</text>
+<path d="M40,412 H84" fill="none" stroke="#59636E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#ah)"/>
+<text x="96" y="417" class="sans m" font-size="14" text-anchor="start">optional</text>
+<text x="40" y="462" class="sans m" font-size="14" text-anchor="start">Remote mode: the central host runs the same binary; clients need no database and no Ollama.</text>
+</svg>

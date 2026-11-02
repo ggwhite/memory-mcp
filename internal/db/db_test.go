@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -363,4 +364,20 @@ func equalIDs(a, b []int64) bool {
 		}
 	}
 	return true
+}
+
+// since / older-than 必須是正整數天數；負數或 0 會產生錯誤的 SQL modifier 而靜默回 0 筆。
+func TestParseSinceRejectsNonPositive(t *testing.T) {
+	d := testDB(t)
+	for _, v := range []string{"-5d", "0d", "-1d"} {
+		if _, err := d.List(ListOptions{Since: v}); err == nil || !strings.Contains(err.Error(), "must be positive") {
+			t.Errorf("List since %q: err = %v", v, err)
+		}
+		if _, err := d.SummariesOlderThan(v, ""); err == nil || !strings.Contains(err.Error(), "must be positive") {
+			t.Errorf("SummariesOlderThan %q: err = %v", v, err)
+		}
+	}
+	if _, err := d.List(ListOptions{Since: "7d"}); err != nil {
+		t.Errorf("7d should be valid: %v", err)
+	}
 }
