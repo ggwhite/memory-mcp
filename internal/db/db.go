@@ -26,6 +26,8 @@ type Memory struct {
 	Created  time.Time `json:"created"`
 	Updated  time.Time `json:"updated"`
 	Redacted int       `json:"redacted,omitempty"`
+	// Supersedes 只在 Store 時使用：這筆新記憶取代的舊記憶 id，會在同一個 transaction 內刪除。
+	Supersedes []int64 `json:"supersedes,omitempty"`
 }
 
 // ListOptions 列表查詢參數。
@@ -174,7 +176,11 @@ func (d *DB) upsertEmbedding(memoryID int64, vec []float32, model string) error 
 }
 
 // Store 儲存一筆記憶（寫入前先 Sanitize，mem.Content／mem.Redacted 會被回寫），回傳 auto-increment ID。
+// mem.Supersedes 有值時改走 storeReplacing：舊記憶全部存在才寫入，並在同一個 transaction 內刪掉。
 func (d *DB) Store(mem *Memory) (int64, error) {
+	if len(mem.Supersedes) > 0 {
+		return d.storeReplacing(mem, "", mem.Supersedes)
+	}
 	clean, n := Sanitize(mem.Content)
 	if clean == "" {
 		return 0, ErrEmptyAfterSanitize
@@ -337,6 +343,9 @@ func parseSince(s string) (int, error) {
 	n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
 	if err != nil {
 		return 0, fmt.Errorf("invalid since format %q: %w", s, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("invalid since %q: duration must be positive", s)
 	}
 	return n, nil
 }

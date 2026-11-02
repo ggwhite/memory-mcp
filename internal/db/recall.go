@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ type RecallOptions struct {
 	ExcludePersonal bool           // 排除 personal-* project
 	Exclude         map[int64]bool // 已注入過的 id
 	Limit           int            // default 3
+	Now             time.Time      // 計算 summary 衰減的基準時間，零值用 time.Now()（測試注入用）
 }
 
 // RecallResult 一筆檢索結果。Score 為 -bm25 加上 2 字 CJK 詞命中加分（越大越相關）；
@@ -42,6 +44,10 @@ const (
 	recallBigramWeight = 2.0
 	// recallProjectBoost 同 project 的排序加權，只影響排序、不影響門檻。
 	recallProjectBoost = 1.15
+	// summary 依年齡衰減的半衰期與下限，只影響排序、不影響門檻：
+	// 舊 summary 描述的狀態多半已過時，同分時應讓較新的 summary 排前面。
+	recallSummaryHalfLifeDays = 90.0
+	recallSummaryFloor        = 0.25
 )
 
 // recallStopBigrams 窗口含其中任一字串就丟掉：高頻虛詞、口語贅字。
@@ -253,17 +259,32 @@ func (d *DB) Recall(ctx context.Context, opts RecallOptions) ([]RecallResult, er
 			out = append(out, c)
 		}
 	}
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
 	rankScore := func(c RecallResult) float64 {
+		s := c.Score * recallDecay(c.Memory, now)
 		if opts.Project != "" && c.Project == opts.Project {
-			return c.Score * recallProjectBoost
+			return s * recallProjectBoost
 		}
-		return c.Score
+		return s
 	}
 	sort.SliceStable(out, func(i, j int) bool { return rankScore(out[i]) > rankScore(out[j]) })
 	if len(out) > limit {
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// recallDecay 回傳排序用的年齡衰減係數：只有 summary 依 created 衰減
+// （0.5^(天數/半衰期)，不低於 recallSummaryFloor），其他 type 一律為 1。
+func recallDecay(m Memory, now time.Time) float64 {
+	if m.Type != "summary" || m.Created.IsZero() {
+		return 1
+	}
+	days := max(now.Sub(m.Created).Hours()/24, 0)
+	return max(recallSummaryFloor, math.Pow(0.5, days/recallSummaryHalfLifeDays))
 }
 
 // recallCandidates 回傳未套門檻的候選（已排除 personal，未排除已注入 id），依 bm25 排序。

@@ -141,3 +141,83 @@ func TestServerImportRejectsFeedbackWithoutProject(t *testing.T) {
 		t.Fatalf("valid batch: n=%d err=%v", n, err)
 	}
 }
+
+func TestClientStoreSupersedes(t *testing.T) {
+	c, d := testClient(t)
+	a, _ := d.Store(&db.Memory{Type: "til", Content: "舊 a"})
+	b, _ := d.Store(&db.Memory{Type: "til", Content: "舊 b"})
+
+	mem := &db.Memory{Type: "til", Content: "新", Supersedes: []int64{a, b, b}}
+	id, err := c.Store(mem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mem.Supersedes) != 2 {
+		t.Errorf("Supersedes = %v, want deduped deleted ids", mem.Supersedes)
+	}
+	got, _ := d.GetMany([]int64{a, b, id})
+	if len(got) != 1 || got[0].ID != id {
+		t.Fatalf("remaining = %+v", got)
+	}
+
+	if _, err := c.Store(&db.Memory{Type: "til", Content: "再新", Supersedes: []int64{id, 999}}); err == nil || !strings.Contains(err.Error(), "999") {
+		t.Fatalf("err = %v, want missing #999", err)
+	}
+	if st, _ := d.Stats(); st.Total != 1 {
+		t.Errorf("total = %d, want 1", st.Total)
+	}
+}
+
+// 被取代的舊記憶不存在是呼叫端的問題：回 404，不是 500，且錯誤訊息要原樣傳到 client。
+func TestStoreSupersededNotFoundIs404(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	ts := httptest.NewServer(NewServer(d).Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/store", "application/json",
+		strings.NewReader(`{"type":"til","content":"x","supersedes":[999]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+	var body map[string]string
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["error"] != "superseded memory not found: #999" {
+		t.Errorf("error = %q", body["error"])
+	}
+
+	c := NewClient(ts.URL)
+	_, err = c.Store(&db.Memory{Type: "til", Content: "x", Supersedes: []int64{999}})
+	if err == nil || err.Error() != "remote: superseded memory not found: #999" {
+		t.Errorf("client err = %v", err)
+	}
+}
+
+// 沒有 supersedes 時回應不帶 "deleted" 欄位。
+func TestStoreOmitsDeletedWhenNoSupersedes(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	ts := httptest.NewServer(NewServer(d).Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/store", "application/json", strings.NewReader(`{"type":"til","content":"x"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	if _, ok := body["deleted"]; ok {
+		t.Errorf("body = %v, want no deleted key", body)
+	}
+}
