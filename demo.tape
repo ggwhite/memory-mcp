@@ -3,15 +3,17 @@ Output demo.gif
 Require memory-mcp
 
 Set Shell "bash"
+Set FontFamily "JetBrains Mono"
 Set FontSize 16
-Set Width 900
+Set Width 1000
 Set Height 550
-Set Padding 20
-Set Theme "Catppuccin Mocha"
+Set Padding 24
+Set WindowBar Colorful
+Set Theme {"name":"memory-mcp","black":"#484f58","red":"#ff7b72","green":"#7ee787","yellow":"#e3b341","blue":"#79c0ff","magenta":"#a196ff","cyan":"#76e3ea","white":"#b1bac4","brightBlack":"#6e7681","brightRed":"#ffa198","brightGreen":"#56d364","brightYellow":"#e3b341","brightBlue":"#a5d6ff","brightMagenta":"#c4bcff","brightCyan":"#b3f0ff","brightWhite":"#ffffff","background":"#0d1117","foreground":"#e6edf3","selection":"#1f1b3d","cursor":"#a196ff"}
 Set TypingSpeed 40ms
 
 Hide
-Type "export MEMORY_MCP_DB=/tmp/memory-mcp-demo.db PS1='$ ' && rm -f $MEMORY_MCP_DB && clear"
+Type `export BASH_SILENCE_DEPRECATION_WARNING=1 MEMORY_MCP_DB=/tmp/memory-mcp-demo.db PS1='\[\e[35m\]$\[\e[0m\] '; unset MEMORY_MCP_REMOTE; rm -f $MEMORY_MCP_DB && clear`
 Enter
 Sleep 1s
 Show
