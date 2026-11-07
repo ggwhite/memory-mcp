@@ -49,13 +49,13 @@ When a local Ollama is reachable, `search` fuses FTS5 and vector results with Re
 <td valign="top">
 
 **MCP server + full CLI**<br>
-7 MCP tools over stdio or Streamable HTTP. The CLI covers store, search, list, get, timeline, update, delete, stats, export/import, reindex, and compact.
+7 MCP tools over stdio or Streamable HTTP. The CLI covers store, search, list, get, timeline, update, delete, stats, export/import, reindex, compact, consolidate, observation, mental, and llm.
 
 </td>
 <td valign="top">
 
 **Claude Code hooks**<br>
-`SessionStart` injects global rules and project memories, every `UserPromptSubmit` injects up to 3 relevant memories in under 300 ms, and `SessionEnd` writes a session summary in the background.
+`SessionStart` injects global rules and project memories, every `UserPromptSubmit` injects up to 3 relevant memories in under 300 ms, and `SessionEnd` writes a session summary (then refreshes that project's mental models) in the background.
 
 </td>
 </tr>
@@ -403,7 +403,7 @@ memory-mcp observation list --project my-app
 memory-mcp observation delete o3                   # accepts 3 or o3
 ```
 
-Flags: `--project <p>` or `--all`, `--type` (default `feedback`), `--threshold` (character-trigram Jaccard, default `0.35`), `--cosine-threshold` (used when both memories have a vector from the same model, default `0.85`), `--max-cluster` (max members per cluster; larger similarity chains are split around seeds, default `20`), and `--apply`. The default run only prints the plan and changes nothing; `--apply` first writes a JSON backup next to the database (same pattern as `compact`). Re-running refines an existing observation whose evidence overlaps instead of creating a duplicate, and skips groups whose evidence is unchanged. Local DB only (`--remote` is refused).
+Flags: `--project <p>` or `--all`, `--type` (default `feedback`), `--threshold` (character-trigram Jaccard, default `0.35`), `--cosine-threshold` (used when both memories have a vector from the same model, default `0.85`), `--max-cluster` (max members per cluster; larger similarity chains are split around seeds, default `20`), and `--apply`. The trigram default is conservative: short English feedback often needs `--threshold 0.25` to group, so preview a lower value before you `--apply` it. The default run only prints the plan and changes nothing; `--apply` first writes a JSON backup next to the database (same pattern as `compact`). Re-running refines an existing observation whose evidence overlaps instead of creating a duplicate, and skips groups whose evidence is unchanged. Local DB only (`--remote` is refused).
 
 - **With an LLM** (cheap tier), the model decides which members state the same rule and writes the canonical sentence in their dominant language; the observation's `source` is `llm:<provider/model>`.
 - **Without an LLM**, the canonical text is the newest member's content and `source` is `heuristic`; the output says `LLM: not configured ..., using heuristic`.
@@ -547,6 +547,10 @@ make lint    # go vet ./...
 ```
 
 The GIFs are recorded with [VHS](https://github.com/charmbracelet/vhs) against throwaway databases in `/tmp`: `vhs demo.tape`, `vhs assets/demo-recall.tape`, and so on, run from the repo root.
+
+## Acknowledgements
+
+Observations and mental models are inspired by [Hindsight](https://github.com/vectorize-io/hindsight) by Vectorize. memory-mcp keeps the ideas but not the cost model: it never calls an LLM on write or in a hook, and every LLM feature is optional.
 
 ## License
 
