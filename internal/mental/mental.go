@@ -103,7 +103,7 @@ func Build(ctx context.Context, d *db.DB, client llm.Client, opts Options) (Resu
 			res.Failures = append(res.Failures, Failure{Model: m, Err: errors.New("empty answer")})
 			continue
 		}
-		m.Answer, m.SourceIDs, m.BuiltFromMaxID, m.Source = answer, sourceIDs, maxID, "llm:"+client.Name()
+		m.Answer, m.SourceIDs, m.BuiltFromMaxID, m.Source = answer, sourceIDs, maxID, synthSource(client)
 		if err := d.SaveMentalModelAnswer(m); err != nil {
 			return Result{}, err
 		}
@@ -287,4 +287,15 @@ func normalizeAnswer(s string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// synthSource 組出 provenance：mental build 用 TierSynth，所以記 provider 加實際 synth 模型
+// （例如 llm:claude-cli/sonnet）；client 沒回報 synth 模型時退回 Name()（cheap 模型）。
+func synthSource(c llm.Client) string {
+	name := c.Name()
+	if m := llm.ModelFor(c, llm.TierSynth); m != "" {
+		provider, _, _ := strings.Cut(name, "/")
+		return "llm:" + provider + "/" + m
+	}
+	return "llm:" + name
 }

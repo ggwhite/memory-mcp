@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,5 +125,71 @@ func TestLLMUsageCounter(t *testing.T) {
 	}
 	if n, err := c.Calls("2000-01-01"); err != nil || n != 0 {
 		t.Errorf("Calls unused day = %d, %v; want 0", n, err)
+	}
+}
+
+// 另一個連線搶先 ALTER 後，alterAddColumn 要視為成功（模擬多 process 並行開舊 DB 的競態）。
+func TestAlterAddColumnLostRace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "race.db")
+	a, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if _, err := a.Exec(oldSchema); err != nil {
+		t.Fatal(err)
+	}
+	b, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	// b 在 a 檢查之後、a 的 ALTER 之前補上欄位。
+	if _, err := b.Exec(`ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'user'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := alterAddColumn(a, "memories", "source", `TEXT NOT NULL DEFAULT 'user'`); err != nil {
+		t.Fatalf("lost race should be nil, got %v", err)
+	}
+	// 欄位真的加不進去（table 不存在）時仍要回報錯誤。
+	if err := alterAddColumn(a, "no_such_table", "x", "TEXT"); err == nil {
+		t.Fatal("want error for missing table")
+	}
+}
+
+// 8 個 goroutine 同時開啟同一個舊 schema DB，都不能失敗。
+func TestOpenOldDBConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(oldSchema); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			d, err := Open(path)
+			if err != nil {
+				errs <- err
+				return
+			}
+			d.Close()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent Open: %v", err)
 	}
 }

@@ -403,12 +403,12 @@ memory-mcp observation list --project my-app
 memory-mcp observation delete o3                   # accepts 3 or o3
 ```
 
-Flags: `--project <p>` or `--all`, `--type` (default `feedback`), `--threshold` (character-trigram Jaccard, default `0.35`), `--cosine-threshold` (used when both memories have a vector from the same model, default `0.85`), and `--apply`. The default run only prints the plan and changes nothing; `--apply` first writes a JSON backup next to the database (same pattern as `compact`). Re-running refines an existing observation whose evidence overlaps instead of creating a duplicate, and skips groups whose evidence is unchanged. Local DB only (`--remote` is refused).
+Flags: `--project <p>` or `--all`, `--type` (default `feedback`), `--threshold` (character-trigram Jaccard, default `0.35`), `--cosine-threshold` (used when both memories have a vector from the same model, default `0.85`), `--max-cluster` (max members per cluster; larger similarity chains are split around seeds, default `20`), and `--apply`. The default run only prints the plan and changes nothing; `--apply` first writes a JSON backup next to the database (same pattern as `compact`). Re-running refines an existing observation whose evidence overlaps instead of creating a duplicate, and skips groups whose evidence is unchanged. Local DB only (`--remote` is refused).
 
 - **With an LLM** (cheap tier), the model decides which members state the same rule and writes the canonical sentence in their dominant language; the observation's `source` is `llm:<provider/model>`.
 - **Without an LLM**, the canonical text is the newest member's content and `source` is `heuristic`; the output says `LLM: not configured ..., using heuristic`.
 
-**In context:** `SessionStart` shows `### global observations` and `### <project> observations` first, one line each: `- o3 ×2 <canonical> (ev: #1 #2)`. Memories that are evidence of an active observation are dropped from the raw feedback sections. With no observations the output is unchanged.
+**In context:** `SessionStart` shows `### 全域 observations` and `### <project> observations` first, one line each: `- o3 ×2 <canonical> (ev: #1 #2)`. Memories that are evidence of an active observation are dropped from the raw feedback sections. With no observations the output is unchanged.
 
 **Undo:** evidence memories are hidden, never deleted. `memory-mcp observation delete <id>` deactivates the observation and its evidence shows up in context again.
 
@@ -435,10 +435,10 @@ Keep observations and mental models fresh with a scheduled job:
 
 ```cron
 # every night at 03:30
-30 3 * * * memory-mcp consolidate --all --apply && memory-mcp mental build --all >> ~/.local/share/memory-mcp/nightly.log 2>&1
+30 3 * * * { memory-mcp consolidate --all --apply && memory-mcp mental build --all; } >> ~/.local/share/memory-mcp/nightly.log 2>&1
 ```
 
-On macOS, put the same command in a launchd agent (`~/Library/LaunchAgents/com.example.memory-mcp-nightly.plist`) with `ProgramArguments` of `/bin/sh -c "memory-mcp consolidate --all --apply && memory-mcp mental build --all"` and a `StartCalendarInterval` of `Hour` 3 / `Minute` 30; use the absolute path of the binary, since launchd does not load your shell `PATH`. Mind `MEMORY_MCP_LLM_DAILY_CALLS` if you have many projects.
+On macOS, put the same command in a launchd agent (`~/Library/LaunchAgents/com.example.memory-mcp-nightly.plist`) with `ProgramArguments` of `/bin/sh -c "{ memory-mcp consolidate --all --apply && memory-mcp mental build --all; } >> ~/.local/share/memory-mcp/nightly.log 2>&1"` (or set `StandardOutPath` / `StandardErrorPath` to the log instead of redirecting) and a `StartCalendarInterval` of `Hour` 3 / `Minute` 30; use the absolute path of the binary, since launchd does not load your shell `PATH`. Mind `MEMORY_MCP_LLM_DAILY_CALLS` if you have many projects.
 
 ## CLI
 

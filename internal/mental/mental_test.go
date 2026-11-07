@@ -329,3 +329,29 @@ func TestQuestionTokens(t *testing.T) {
 		t.Errorf("tokens = %q, want %q", got, want)
 	}
 }
+
+// modelerLLM 實作 llm.Modeler：Name 回報 cheap 模型，Model(TierSynth) 回報 synth 模型。
+type modelerLLM struct{ llm.Client }
+
+func (modelerLLM) Model(t llm.Tier) string {
+	if t == llm.TierSynth {
+		return "sonnet"
+	}
+	return "haiku"
+}
+
+// source 要記實際回答的 synth 模型，而不是 Name() 的 cheap 模型。
+func TestBuildSourceUsesSynthModel(t *testing.T) {
+	d := testDB(t)
+	d.Store(&db.Memory{Type: "til", Content: "deploy uses helm", Project: "demo"})
+	d.AddMentalModel("demo", "deploy")
+	f := &fakeLLM{reply: answer("Use helm #1")}
+	c := modelerLLM{Client: llm.FuncClient{ID: "claude-cli/haiku", Fn: f.client().Complete}}
+	if _, err := Build(context.Background(), d, c, Options{Project: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	ms, _ := d.ListMentalModels(db.MentalModelFilter{Project: "demo"})
+	if len(ms) != 1 || ms[0].Source != "llm:claude-cli/sonnet" {
+		t.Errorf("source = %+v, want llm:claude-cli/sonnet", ms)
+	}
+}

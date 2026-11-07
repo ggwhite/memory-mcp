@@ -171,45 +171,96 @@ func Open(path string) (*DB, error) {
 	}
 	// WAL 允許併發讀 + 單一寫（寫不擋讀），busy_timeout 讓多個 session 的
 	// serve process 遇到寫鎖時等待而非立即回報 readonly/busy。
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	if _, err := sqlDB.Exec(schema); err != nil {
+	// 舊 DB 切成 WAL 需要獨占鎖，且不會套用 busy_timeout：多個 process 同時開啟時落敗者會立刻 SQLITE_BUSY。
+	// WAL 設定寫進檔案、由勝出者完成，所以落敗者忽略 BUSY 即可（其餘操作仍依 busy_timeout 等待）。
+	if _, err := sqlDB.Exec(`PRAGMA journal_mode=WAL`); err != nil && !strings.Contains(err.Error(), "SQLITE_BUSY") {
 		sqlDB.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
+		return nil, fmt.Errorf("set wal: %w", err)
 	}
-	if err := addColumnIfMissing(sqlDB, "memories", "source", `TEXT NOT NULL DEFAULT 'user'`); err != nil {
+	if err := migrate(sqlDB); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return &DB{db: sqlDB}, nil
 }
 
-// addColumnIfMissing 舊 DB 的 table 缺少 column 時以 ALTER TABLE 補上；既有資料列取得 DEFAULT 值。
-func addColumnIfMissing(sqlDB *sql.DB, table, column, def string) error {
-	rows, err := sqlDB.Query(`SELECT name FROM pragma_table_info(?)`, table)
+// migrate 建 schema 並補舊 DB 缺的欄位。整段包在 BEGIN IMMEDIATE：多個 process 同時開啟時，
+// 先取得寫鎖者執行，其他的依 busy_timeout 排隊；沒有它，讀鎖升級寫鎖的衝突會立刻回 SQLITE_BUSY。
+func migrate(sqlDB *sql.DB) error {
+	ctx := context.Background()
+	conn, err := sqlDB.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("table info %s: %w", table, err)
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, schema); err != nil {
+		conn.ExecContext(ctx, "ROLLBACK")
+		return err
+	}
+	if err := addColumnIfMissing(conn, "memories", "source", `TEXT NOT NULL DEFAULT 'user'`); err != nil {
+		conn.ExecContext(ctx, "ROLLBACK")
+		return err
+	}
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	return err
+}
+
+// execQuerier *sql.DB 與 *sql.Conn 共有的查詢／執行方法，讓 migration helper 兩者都能用。
+type execQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// hasColumn 以 PRAGMA table_info 檢查 table 是否已有 column。
+func hasColumn(sqlDB execQuerier, table, column string) (bool, error) {
+	rows, err := sqlDB.QueryContext(context.Background(), `SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, fmt.Errorf("table info %s: %w", table, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return fmt.Errorf("table info %s: %w", table, err)
+			return false, fmt.Errorf("table info %s: %w", table, err)
 		}
 		if name == column {
-			return nil
+			return true, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("table info %s: %w", table, err)
+		return false, fmt.Errorf("table info %s: %w", table, err)
 	}
-	if _, err := sqlDB.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, def)); err != nil {
-		return fmt.Errorf("add column %s.%s: %w", table, column, err)
+	return false, nil
+}
+
+// addColumnIfMissing 舊 DB 的 table 缺少 column 時以 ALTER TABLE 補上；既有資料列取得 DEFAULT 值。
+func addColumnIfMissing(sqlDB execQuerier, table, column, def string) error {
+	ok, err := hasColumn(sqlDB, table, column)
+	if err != nil || ok {
+		return err
 	}
-	return nil
+	return alterAddColumn(sqlDB, table, column, def)
+}
+
+// alterAddColumn 執行 ALTER TABLE ADD COLUMN。多個 process 同時開啟舊 DB（例如升級後 hooks 並行）時，
+// 檢查與 ALTER 之間可能被別人搶先補上而得到 duplicate column；此時重查，欄位已存在就視為成功。
+func alterAddColumn(sqlDB execQuerier, table, column, def string) error {
+	_, err := sqlDB.ExecContext(context.Background(), fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, def))
+	if err == nil {
+		return nil
+	}
+	if ok, cerr := hasColumn(sqlDB, table, column); cerr == nil && ok {
+		return nil
+	}
+	return fmt.Errorf("add column %s.%s: %w", table, column, err)
 }
 
 // Close 關閉資料庫連線。
