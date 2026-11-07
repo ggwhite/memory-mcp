@@ -221,3 +221,25 @@ func TestStoreOmitsDeletedWhenNoSupersedes(t *testing.T) {
 		t.Errorf("body = %v, want no deleted key", body)
 	}
 }
+
+// REST 往返：client 把 Since / Until 帶進 query string，server 再傳給 store。
+func TestClientSearchSinceUntil(t *testing.T) {
+	c, d := testClient(t)
+	d.Store(&db.Memory{Type: "til", Content: "gamma entry"})
+
+	got, err := c.Search(db.SearchOptions{Query: "gamma", Since: "7d"})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("since=7d: got %v, err %v; want 1 hit", got, err)
+	}
+	got, err = c.Search(db.SearchOptions{Query: "gamma", Until: "2020-01-10"})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("until=2020-01-10: got %v, err %v; want 0 hits", got, err)
+	}
+	got, err = c.Search(db.SearchOptions{Query: "gamma", Since: "2999-01-01"})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("since=2999-01-01: got %v, err %v; want 0 hits", got, err)
+	}
+	if _, err := c.Search(db.SearchOptions{Query: "gamma", Since: "nope"}); err == nil {
+		t.Error("bad since should return an error")
+	}
+}

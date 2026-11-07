@@ -298,3 +298,27 @@ func TestMCPStoreSupersedesAccepted(t *testing.T) {
 		}
 	})
 }
+
+// 新存的記憶 created 為現在：until 設在遠古應被擋掉、since=7d 應保留，
+// 證明兩個參數都有傳進 db.Search。
+func TestMCPSearchSinceUntil(t *testing.T) {
+	d := testDB(t)
+	s := NewServer(d)
+	d.Store(&db.Memory{Type: "til", Content: "gamma entry"})
+
+	text := resultText(callTool(t, s, "memory_search", map[string]any{"query": "gamma", "since": "7d"}))
+	if !strings.Contains(text, "gamma entry") {
+		t.Errorf("since=7d should keep the new row:\n%s", text)
+	}
+	text = resultText(callTool(t, s, "memory_search", map[string]any{"query": "gamma", "until": "2020-01-10"}))
+	if strings.Contains(text, "gamma entry") {
+		t.Errorf("until=2020-01-10 should exclude the new row:\n%s", text)
+	}
+	text = resultText(callTool(t, s, "memory_search", map[string]any{"query": "gamma", "since": "2999-01-01"}))
+	if strings.Contains(text, "gamma entry") {
+		t.Errorf("future since should exclude the new row:\n%s", text)
+	}
+	if bad := callTool(t, s, "memory_search", map[string]any{"query": "gamma", "since": "nope"}); !bad.IsError {
+		t.Error("bad since should be a tool error")
+	}
+}

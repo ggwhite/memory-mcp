@@ -147,6 +147,7 @@ func (s *Server) Handler() http.Handler {
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		results, err := s.store.Search(db.SearchOptions{
 			Query: q.Get("q"), Type: q.Get("type"), Limit: limit,
+			Since: q.Get("since"), Until: q.Get("until"),
 		})
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)

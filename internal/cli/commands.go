@@ -104,6 +104,8 @@ func init() {
 
 	searchCmd.Flags().String("type", "", "filter by memory type")
 	searchCmd.Flags().IntP("limit", "n", 5, "max results")
+	searchCmd.Flags().String("since", "", "only memories created at/after: Nh, Nd, Nw or YYYY-MM-DD")
+	searchCmd.Flags().String("until", "", "only memories created at/before: Nh, Nd, Nw or YYYY-MM-DD (inclusive of that day)")
 	searchCmd.Flags().Bool("compact", false, "print one index line per result")
 
 	listCmd.Flags().String("type", "", "filter by memory type")
@@ -184,6 +186,8 @@ var searchCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		typ, _ := cmd.Flags().GetString("type")
 		limit, _ := cmd.Flags().GetInt("limit")
+		since, _ := cmd.Flags().GetString("since")
+		until, _ := cmd.Flags().GetString("until")
 
 		d, err := openStore()
 		if err != nil {
@@ -192,7 +196,7 @@ var searchCmd = &cobra.Command{
 		defer d.Close()
 
 		results, err := d.Search(db.SearchOptions{
-			Query: args[0], Type: typ, Limit: limit,
+			Query: args[0], Type: typ, Limit: limit, Since: since, Until: until,
 		})
 		if err != nil {
 			return err
