@@ -324,3 +324,42 @@ func TestClaudeCLIFailure(t *testing.T) {
 		t.Error("want error for missing binary")
 	}
 }
+
+// fakeClaudeEnv 寫一支假的 claude 指令，印出子行程看到的 Anthropic 金鑰環境變數（未設定時印 <unset>）。
+func fakeClaudeEnv(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\necho \"key:${ANTHROPIC_API_KEY-<unset>}\"\necho \"token:${ANTHROPIC_AUTH_TOKEN-<unset>}\"\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestClaudeCLIStripsAPIKey(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", fakeSecret)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "tok-NOT_REAL")
+	t.Setenv("MEMORY_MCP_LLM_CLAUDE_KEEP_API_KEY", "")
+	c := &ClaudeCLI{Command: fakeClaudeEnv(t), CheapModel: "haiku", SynthModel: "sonnet"}
+	out, err := c.Complete(context.Background(), Request{Prompt: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "key:<unset>") || !strings.Contains(out, "token:<unset>") {
+		t.Errorf("api key leaked to claude -p: %q", out)
+	}
+}
+
+func TestClaudeCLIKeepAPIKeyOptIn(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", fakeSecret)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "tok-NOT_REAL")
+	t.Setenv("MEMORY_MCP_LLM_CLAUDE_KEEP_API_KEY", "1")
+	c := &ClaudeCLI{Command: fakeClaudeEnv(t), CheapModel: "haiku", SynthModel: "sonnet"}
+	out, err := c.Complete(context.Background(), Request{Prompt: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "key:"+fakeSecret) || !strings.Contains(out, "token:tok-NOT_REAL") {
+		t.Errorf("opt-in should keep keys: %q", out)
+	}
+}
