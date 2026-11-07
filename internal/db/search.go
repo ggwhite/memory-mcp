@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -13,6 +14,80 @@ type SearchOptions struct {
 	Query string
 	Type  string
 	Limit int // default 5
+	// Since、Until 依 created 過濾；支援相對（7d、24h、2w）與絕對
+	// YYYY-MM-DD，Until 的絕對日期含當天整天。空字串表示不限。
+	Since string
+	Until string
+}
+
+// parseTimeBound 把 Since / Until 字串轉成可與 created 欄位（UTC，timeLayout）
+// 直接字串比較的邊界。相對格式為 <正整數>(h|d|w)，以 now 往前推；絕對格式為
+// YYYY-MM-DD，Since 取當天 00:00:00、Until 取當天 23:59:59（含當天整天）。
+// 空字串回傳空邊界（不限）；格式錯誤回傳 error。
+func parseTimeBound(s string, until bool, now time.Time) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	if day, err := time.Parse("2006-01-02", s); err == nil {
+		if until {
+			day = day.Add(24*time.Hour - time.Second)
+		}
+		return day.Format(timeLayout), nil
+	}
+	if len(s) >= 2 {
+		n, err := strconv.Atoi(s[:len(s)-1])
+		if err == nil && n > 0 {
+			var unit time.Duration
+			switch s[len(s)-1] {
+			case 'h':
+				unit = time.Hour
+			case 'd':
+				unit = 24 * time.Hour
+			case 'w':
+				unit = 7 * 24 * time.Hour
+			}
+			if unit > 0 {
+				return now.UTC().Add(-time.Duration(n) * unit).Format(timeLayout), nil
+			}
+		}
+	}
+	name := "since"
+	if until {
+		name = "until"
+	}
+	return "", fmt.Errorf("invalid %s %q, expected Nh/Nd/Nw or YYYY-MM-DD", name, s)
+}
+
+// timeRange 是已解析的 created 邊界，空字串代表該側不限。
+type timeRange struct {
+	since, until string
+}
+
+// resolveTimeRange 解析 opts 的 Since / Until。
+func resolveTimeRange(opts SearchOptions) (timeRange, error) {
+	now := time.Now()
+	since, err := parseTimeBound(opts.Since, false, now)
+	if err != nil {
+		return timeRange{}, err
+	}
+	until, err := parseTimeBound(opts.Until, true, now)
+	if err != nil {
+		return timeRange{}, err
+	}
+	return timeRange{since: since, until: until}, nil
+}
+
+// apply 把邊界條件接到 query 後面，col 為 created 欄位（含 table alias）。
+func (r timeRange) apply(query string, args []any, col string) (string, []any) {
+	if r.since != "" {
+		query += ` AND ` + col + ` >= ?`
+		args = append(args, r.since)
+	}
+	if r.until != "" {
+		query += ` AND ` + col + ` <= ?`
+		args = append(args, r.until)
+	}
+	return query, args
 }
 
 // SearchResult 搜索結果，包含 FTS5 排名分數。混合搜尋（embedder 已設定）開
@@ -49,7 +124,12 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 		return nil, nil
 	}
 
-	ftsResults, err := d.ftsSearch(opts, limit)
+	tr, err := resolveTimeRange(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	ftsResults, err := d.ftsSearch(opts, tr, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +144,7 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 		return ftsResults, nil
 	}
 
-	vectorIDs, err := d.vectorRank(queryVec, opts.Type)
+	vectorIDs, err := d.vectorRank(queryVec, opts.Type, tr)
 	if err != nil || len(vectorIDs) == 0 {
 		return ftsResults, nil
 	}
@@ -75,7 +155,7 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 	if ftsCandidateLimit < ftsCandidatePoolMin {
 		ftsCandidateLimit = ftsCandidatePoolMin
 	}
-	ftsCandidates, err := d.ftsSearch(opts, ftsCandidateLimit)
+	ftsCandidates, err := d.ftsSearch(opts, tr, ftsCandidateLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +173,7 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 }
 
 // ftsSearch 使用 FTS5 全文搜索記憶，依相關度排序。
-func (d *DB) ftsSearch(opts SearchOptions, limit int) ([]SearchResult, error) {
+func (d *DB) ftsSearch(opts SearchOptions, tr timeRange, limit int) ([]SearchResult, error) {
 	query := `
 		SELECT m.id, m.type, m.content, m.tags, m.project, m.created, m.updated, m.source, f.rank
 		FROM memories_fts f
@@ -105,6 +185,8 @@ func (d *DB) ftsSearch(opts SearchOptions, limit int) ([]SearchResult, error) {
 		query += ` AND m.type = ?`
 		args = append(args, opts.Type)
 	}
+
+	query, args = tr.apply(query, args, "m.created")
 
 	query += ` ORDER BY f.rank LIMIT ?`
 	args = append(args, limit)
@@ -144,13 +226,15 @@ func ftsQuery(input string) string {
 // vectorRank 計算 queryVec 與所有（依 type 篩選後）記憶向量的 cosine
 // similarity，回傳依相似度由高到低排序的記憶 ID 清單。目前記憶量規模
 // （~220 筆）brute-force 全量計算即可，不做提前截斷。
-func (d *DB) vectorRank(queryVec []float32, typ string) ([]int64, error) {
-	query := `SELECT e.memory_id, e.vector FROM memory_embeddings e`
+func (d *DB) vectorRank(queryVec []float32, typ string, tr timeRange) ([]int64, error) {
+	query := `SELECT e.memory_id, e.vector FROM memory_embeddings e
+		JOIN memories m ON m.id = e.memory_id WHERE 1=1`
 	var args []any
 	if typ != "" {
-		query += ` JOIN memories m ON m.id = e.memory_id WHERE m.type = ?`
+		query += ` AND m.type = ?`
 		args = append(args, typ)
 	}
+	query, args = tr.apply(query, args, "m.created")
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {

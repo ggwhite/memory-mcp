@@ -148,6 +148,8 @@ func (s *Server) handleSearch(_ context.Context, req gomcp.CallToolRequest) (*go
 		Query: req.GetString("query", ""),
 		Type:  req.GetString("type", ""),
 		Limit: limit,
+		Since: req.GetString("since", ""),
+		Until: req.GetString("until", ""),
 	})
 	if err != nil {
 		return errResult(err), nil
@@ -277,6 +279,8 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 		gomcp.WithString("query", gomcp.Required(), gomcp.Description("Search keywords — supports CJK, minimum 3 characters")),
 		gomcp.WithString("type", gomcp.Description("Filter by type: feedback, til, summary, knowledge")),
 		gomcp.WithNumber("limit", gomcp.Description("Max results (default 5)")),
+		gomcp.WithString("since", gomcp.Description("Only memories created at or after this time: relative Nh/Nd/Nw (e.g. 24h, 7d, 2w) or absolute YYYY-MM-DD")),
+		gomcp.WithString("until", gomcp.Description("Only memories created at or before this time: relative Nh/Nd/Nw or absolute YYYY-MM-DD (inclusive of that whole day)")),
 		gomcp.WithBoolean("compact", gomcp.Description("true (default) = index lines only; false = full JSON results")),
 	), s.handleSearch)
 

@@ -160,6 +160,8 @@ func (c *Client) Search(opts db.SearchOptions) ([]db.SearchResult, error) {
 	q := url.Values{}
 	q.Set("q", opts.Query)
 	setIfNonEmpty(q, "type", opts.Type)
+	setIfNonEmpty(q, "since", opts.Since)
+	setIfNonEmpty(q, "until", opts.Until)
 	if opts.Limit > 0 {
 		q.Set("limit", strconv.Itoa(opts.Limit))
 	}
