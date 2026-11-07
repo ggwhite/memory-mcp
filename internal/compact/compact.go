@@ -94,7 +94,13 @@ func WriteBackup(dir string, groups []Group, now time.Time) (string, error) {
 	for _, g := range groups {
 		memories = append(memories, g.Memories...)
 	}
-	data, err := json.MarshalIndent(memories, "", "  ")
+	return WriteJSONBackup(dir, "compact-"+now.Format("20060102-150405"), memories)
+}
+
+// WriteJSONBackup 把 v 以縮排 JSON 寫到 dir/<base>.json；同名已存在則改 <base>-1.json、-2…，絕不覆蓋。
+// 回傳檔案路徑。compact 與 consolidate 共用同一個備份目錄與命名規則。
+func WriteJSONBackup(dir, base string, v any) (string, error) {
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("backup marshal: %w", err)
 	}
@@ -102,7 +108,6 @@ func WriteBackup(dir string, groups []Group, now time.Time) (string, error) {
 		return "", fmt.Errorf("backup dir: %w", err)
 	}
 	// O_EXCL 保證不覆蓋既有備份：撞名時在檔名後加 -1、-2…。
-	base := "compact-" + now.Format("20060102-150405")
 	for i := 0; ; i++ {
 		name := base + ".json"
 		if i > 0 {

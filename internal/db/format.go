@@ -28,6 +28,20 @@ func CompactLine(m Memory, n int, withProject bool) string {
 	return b.String()
 }
 
+// ObservationLine 一筆 observation 的單行索引格式：「- o<id> ×<proof_count> <內容> (ev: #a #b)」。
+// 以 o 前綴與記憶的 #id 區分；內容依 n 裁切，證據 id 全列以便追溯。
+func ObservationLine(o Observation, n int) string {
+	return fmt.Sprintf("- o%d ×%d %s (ev: %s)", o.ID, o.ProofCount, Snippet(o.Content, n), idRefs(o.Evidence))
+}
+
+func idRefs(ids []int64) string {
+	refs := make([]string, len(ids))
+	for i, id := range ids {
+		refs[i] = fmt.Sprintf("#%d", id)
+	}
+	return strings.Join(refs, " ")
+}
+
 // FormatFull 一筆記憶的全文格式。
 func FormatFull(m Memory) string {
 	line := fmt.Sprintf("#%d [%s] %s", m.ID, m.Type, m.Created.Format("2006-01-02"))

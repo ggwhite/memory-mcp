@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -118,6 +119,22 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     day   TEXT PRIMARY KEY,
     calls INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS observations (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    project       TEXT NOT NULL DEFAULT '',
+    type          TEXT NOT NULL DEFAULT 'feedback',
+    content       TEXT NOT NULL,
+    evidence      TEXT NOT NULL DEFAULT '[]',
+    evidence_hash TEXT NOT NULL DEFAULT '',
+    proof_count   INTEGER NOT NULL DEFAULT 0,
+    source        TEXT NOT NULL DEFAULT 'heuristic',
+    active        INTEGER NOT NULL DEFAULT 1,
+    created       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+    updated       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now'))
+);
+
+CREATE INDEX IF NOT EXISTS observations_project_active ON observations(project, active);
 `
 
 // sourceUser 未指定來源時的預設值（使用者／agent 手動寫入）。
@@ -574,39 +591,60 @@ type contextSection struct {
 	lines []string
 }
 
-// projectContext 專案索引：全域 feedback、專案 feedback、專案 summary、專案其他記憶。
-// 段落順序即裁切優先序（fitBudget 從最後一段裁起），feedback 放前面確保最後才被裁。
+// projectContext 專案索引：全域與專案 observations、全域 feedback、專案 feedback、專案 summary、專案其他記憶。
+// 段落順序即裁切優先序（fitBudget 從最後一段裁起），observations 與 feedback 放前面確保最後才被裁。
 // personal- 開頭的 project 是個人記憶，home 是家目錄的雜項 session，兩者都不注入專案段。
+// active observation 的證據記憶不再以原始行出現；各段查詢多取「被隱藏筆數」再裁回原上限，
+// 讓隱藏的證據不佔名額。沒有 active observation 時輸出與加入 observations 之前逐 byte 相同。
 func (d *DB) projectContext(project string) (string, error) {
-	global, err := d.queryMemories(selectMemoryCols +
-		` WHERE type = 'feedback' AND project = 'global' ORDER BY created DESC, id DESC LIMIT 10`)
+	includeProject := !strings.HasPrefix(project, personalProjectPrefix) && project != homeProject
+	globalObs, err := d.contextObservations("global", 10)
+	if err != nil {
+		return "", fmt.Errorf("context global observations: %w", err)
+	}
+	var projectObs []Observation
+	if includeProject && project != "global" {
+		projectObs, err = d.contextObservations(project, 20)
+		if err != nil {
+			return "", fmt.Errorf("context observations: %w", err)
+		}
+	}
+	seen := make(map[int64]bool)
+	for _, o := range append(slices.Clone(globalObs), projectObs...) {
+		for _, id := range o.Evidence {
+			seen[id] = true
+		}
+	}
+	extra := len(seen)
+
+	global, err := d.queryMemories(selectMemoryCols+
+		` WHERE type = 'feedback' AND project = 'global' ORDER BY created DESC, id DESC LIMIT ?`, 10+extra)
 	if err != nil {
 		return "", fmt.Errorf("context global: %w", err)
 	}
 	var feedback, summaries, others []Memory
-	if !strings.HasPrefix(project, personalProjectPrefix) && project != homeProject {
+	if includeProject {
 		feedback, err = d.queryMemories(selectMemoryCols+
-			` WHERE type = 'feedback' AND project = ? ORDER BY created DESC, id DESC LIMIT 20`, project)
+			` WHERE type = 'feedback' AND project = ? ORDER BY created DESC, id DESC LIMIT ?`, project, 20+extra)
 		if err != nil {
 			return "", fmt.Errorf("context feedback: %w", err)
 		}
 		summaries, err = d.queryMemories(selectMemoryCols+
-			` WHERE type = 'summary' AND project = ? ORDER BY created DESC, id DESC LIMIT 3`, project)
+			` WHERE type = 'summary' AND project = ? ORDER BY created DESC, id DESC LIMIT ?`, project, 3+extra)
 		if err != nil {
 			return "", fmt.Errorf("context summary: %w", err)
 		}
 		others, err = d.queryMemories(selectMemoryCols+
-			` WHERE type IN ('til', 'knowledge') AND project = ? ORDER BY created DESC, id DESC LIMIT 10`, project)
+			` WHERE type IN ('til', 'knowledge') AND project = ? ORDER BY created DESC, id DESC LIMIT ?`, project, 10+extra)
 		if err != nil {
 			return "", fmt.Errorf("context others: %w", err)
 		}
 	}
 
-	seen := make(map[int64]bool)
-	toLines := func(ms []Memory) []string {
+	toLines := func(ms []Memory, limit int) []string {
 		var lines []string
 		for _, m := range ms {
-			if seen[m.ID] {
+			if seen[m.ID] || len(lines) >= limit {
 				continue
 			}
 			seen[m.ID] = true
@@ -614,11 +652,20 @@ func (d *DB) projectContext(project string) (string, error) {
 		}
 		return lines
 	}
+	obsLines := func(obs []Observation) []string {
+		var lines []string
+		for _, o := range obs {
+			lines = append(lines, ObservationLine(o, contextSnippetRunes))
+		}
+		return lines
+	}
 	sections := []contextSection{
-		{"### 全域 feedback", toLines(global)},
-		{fmt.Sprintf("### %s feedback", project), toLines(feedback)},
-		{fmt.Sprintf("### %s summary", project), toLines(summaries)},
-		{fmt.Sprintf("### %s 其他記憶", project), toLines(others)},
+		{"### 全域 observations", obsLines(globalObs)},
+		{fmt.Sprintf("### %s observations", project), obsLines(projectObs)},
+		{"### 全域 feedback", toLines(global, 10)},
+		{fmt.Sprintf("### %s feedback", project), toLines(feedback, 20)},
+		{fmt.Sprintf("### %s summary", project), toLines(summaries, 3)},
+		{fmt.Sprintf("### %s 其他記憶", project), toLines(others, 10)},
 	}
 
 	header := fmt.Sprintf("## Memory context（project: %s）\n\n", project)

@@ -1,0 +1,385 @@
+// Package consolidate 把同一 (project, type) 內近似重複的記憶整併成 observation：
+// 先用相似度（向量 cosine 或字元 trigram Jaccard）做 union-find 分群，再交給 LLM（或沒設定 LLM 時用
+// 啟發式）挑出真正講同一條規則的成員並寫出一句 canonical。證據記憶永遠不刪，只在 context 中被隱藏。
+package consolidate
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+	"unicode"
+
+	"github.com/ggwhite/memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/llm"
+)
+
+const (
+	// DefaultType 未指定 --type 時整併的記憶類型。
+	DefaultType = "feedback"
+	// DefaultTrigramThreshold 兩筆都沒有可比較向量時，trigram Jaccard 視為相似的下限。
+	DefaultTrigramThreshold = 0.35
+	// DefaultCosineThreshold 兩筆都有同模型向量時，cosine 視為相似的下限。
+	DefaultCosineThreshold = 0.85
+	// SourceHeuristic 沒有 LLM 時產生的 observation 的 source 值。
+	SourceHeuristic = "heuristic"
+	// promptMemberRunes 每筆成員送進 prompt 的內容上限，避免單筆超長記憶撐爆 prompt。
+	promptMemberRunes = 400
+)
+
+var validTypes = []string{"feedback", "til", "summary", "knowledge"}
+
+// Thresholds 分群用的相似度門檻；0 表示用預設值。
+type Thresholds struct {
+	Trigram float64
+	Cosine  float64
+}
+
+// Options Propose 的參數。Project 與 All 二選一；Type 空字串為 DefaultType；LLM 為 nil 時走啟發式。
+type Options struct {
+	Project    string
+	All        bool
+	Type       string
+	Thresholds Thresholds
+	LLM        llm.Client
+}
+
+// Cluster 相似度分群的結果，Members 依 created、id 由舊到新。
+type Cluster struct {
+	Project string
+	Type    string
+	Members []db.Memory
+}
+
+// IDs 依序列出成員 id。
+func (c Cluster) IDs() []int64 {
+	ids := make([]int64, len(c.Members))
+	for i, m := range c.Members {
+		ids[i] = m.ID
+	}
+	return ids
+}
+
+// Failure 一個群組的 LLM 呼叫失敗（含 llm.ErrBudget）；該群組整個跳過，不退回啟發式。
+type Failure struct {
+	Cluster Cluster
+	Err     error
+}
+
+// Result Propose 的結果。Proposals 中 ID 為 0 的是新增，否則是要更新的既有 observation（證據已取聯集）。
+// Unchanged 為證據 hash 沒變而跳過的群組數；Rejected 為與使用者停用過的 observation 證據完全相同而跳過的群組數。
+type Result struct {
+	Proposals []db.Observation
+	Unchanged int
+	Rejected  int
+	Failures  []Failure
+}
+
+// Propose 分群並產生整併提案，唯讀：不寫 observations（LLM 預算計數除外）。
+// 設定了 LLM 時每個群組呼叫一次 TierCheap；某群組呼叫失敗就記在 Failures 並跳過，
+// 不改用啟發式，避免 LLM 品質的 observation 被悄悄換成啟發式結果。
+func Propose(ctx context.Context, d *db.DB, opts Options) (Result, error) {
+	if opts.Type == "" {
+		opts.Type = DefaultType
+	}
+	if !slices.Contains(validTypes, opts.Type) {
+		return Result{}, fmt.Errorf("consolidate: invalid type %q", opts.Type)
+	}
+	if opts.All == (opts.Project != "") {
+		return Result{}, fmt.Errorf("consolidate: specify exactly one of --project or --all")
+	}
+	th := opts.Thresholds
+	if th.Trigram <= 0 {
+		th.Trigram = DefaultTrigramThreshold
+	}
+	if th.Cosine <= 0 {
+		th.Cosine = DefaultCosineThreshold
+	}
+	projects := []string{opts.Project}
+	if opts.All {
+		var err error
+		if projects, err = d.MemoryProjects(opts.Type); err != nil {
+			return Result{}, err
+		}
+	}
+
+	var res Result
+	for _, project := range projects {
+		if err := proposeScope(ctx, d, scope{project: project, typ: opts.Type, th: th, llm: opts.LLM}, &res); err != nil {
+			return Result{}, err
+		}
+	}
+	return res, nil
+}
+
+type scope struct {
+	project, typ string
+	th           Thresholds
+	llm          llm.Client
+}
+
+func proposeScope(ctx context.Context, d *db.DB, s scope, res *Result) error {
+	candidates, err := d.ConsolidationCandidates(s.project, s.typ)
+	if err != nil {
+		return err
+	}
+	clusters := cluster(candidates, s.th)
+	if len(clusters) == 0 {
+		return nil
+	}
+	existing, err := d.ListObservations(db.ObservationFilter{Project: s.project, Type: s.typ, IncludeInactive: true})
+	if err != nil {
+		return err
+	}
+	pl := newPlanner(existing)
+	for _, c := range clusters {
+		c.Project, c.Type = s.project, s.typ
+		groups, source, err := groupCluster(ctx, s.llm, c)
+		if err != nil {
+			res.Failures = append(res.Failures, Failure{Cluster: c, Err: err})
+			continue
+		}
+		for _, g := range groups {
+			pl.add(c, g, source)
+		}
+	}
+	pl.collect(res)
+	return nil
+}
+
+// group 一組講同一條規則的成員與其 canonical 句子。
+type group struct {
+	ids       []int64
+	canonical string
+}
+
+// groupCluster 有 LLM 時請模型分組，否則整個群組視為一組、canonical 取最新一筆的內容。
+func groupCluster(ctx context.Context, client llm.Client, c Cluster) ([]group, string, error) {
+	if client == nil {
+		newest := c.Members[len(c.Members)-1]
+		return []group{{ids: c.IDs(), canonical: newest.Content}}, SourceHeuristic, nil
+	}
+	var reply struct {
+		Groups []struct {
+			IDs       []int64 `json:"ids"`
+			Canonical string  `json:"canonical"`
+		} `json:"groups"`
+	}
+	req := llm.Request{System: systemPrompt, Prompt: buildPrompt(c), Tier: llm.TierCheap}
+	if err := llm.CompleteJSON(ctx, client, req, &reply); err != nil {
+		return nil, "", err
+	}
+	// 驗證回覆：只保留群組內的 id；同一 id 只算在第一個出現的組；少於 2 筆或 canonical 空白的組丟掉。
+	members := make(map[int64]bool, len(c.Members))
+	for _, m := range c.Members {
+		members[m.ID] = true
+	}
+	used := make(map[int64]bool)
+	var out []group
+	for _, g := range reply.Groups {
+		canonical := strings.TrimSpace(g.Canonical)
+		var ids []int64
+		for _, id := range g.IDs {
+			if members[id] && !used[id] && !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) < 2 || canonical == "" {
+			continue
+		}
+		for _, id := range ids {
+			used[id] = true
+		}
+		slices.Sort(ids)
+		out = append(out, group{ids: ids, canonical: canonical})
+	}
+	return out, "llm:" + client.Name(), nil
+}
+
+const systemPrompt = `你負責整併重複的記憶。輸入是一群內容相近的記憶，每行開頭是記憶 id（#數字）。
+找出「其實在講同一條規則或事實」的成員分成一組，每組寫一句 canonical 句子概括該規則。
+規則：
+- ids 只能使用輸入中列出的 id，不可自創或引用其他 id。
+- 一個 id 最多屬於一組；只有 1 筆的不要成組；沒有可整併的就回 {"groups":[]}。
+- canonical 用該組成員的主要語言（多數成員使用的語言）撰寫，一句話，保留具體識別資訊（指令、路徑、工具名）。
+輸出格式：{"groups":[{"ids":[1,2],"canonical":"..."}]}`
+
+// buildPrompt 列出群組成員（依時間由舊到新），每筆附 id 與日期。
+func buildPrompt(c Cluster) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "project: %s，type: %s。以下記憶只能使用這些 id：\n\n", c.Project, c.Type)
+	for _, m := range c.Members {
+		fmt.Fprintf(&b, "#%d（%s）%s\n", m.ID, m.Created.UTC().Format("2006-01-02"), db.Snippet(m.Content, promptMemberRunes))
+	}
+	return b.String()
+}
+
+// planner 把各組對照既有 observations：與 active observation 證據重疊就更新（證據取聯集），
+// 否則新增。同一次執行中多組命中同一筆 observation 時累加在同一份工作副本上。
+type planner struct {
+	active    []*db.Observation
+	rejected  map[string]bool
+	proposed  []*db.Observation
+	unchanged int
+	rejectedN int
+}
+
+func newPlanner(existing []db.Observation) *planner {
+	pl := &planner{rejected: make(map[string]bool)}
+	for _, o := range existing {
+		if !o.Active {
+			pl.rejected[o.EvidenceHash] = true
+			continue
+		}
+		pl.active = append(pl.active, &o)
+	}
+	return pl
+}
+
+func (pl *planner) add(c Cluster, g group, source string) {
+	for _, o := range pl.active {
+		if !overlaps(o.Evidence, g.ids) {
+			continue
+		}
+		// 多筆重疊時只更新第一筆（id 最小），其餘維持原樣。
+		union := sortedUnion(o.Evidence, g.ids)
+		hash := db.EvidenceHash(union)
+		if hash == o.EvidenceHash {
+			pl.unchanged++
+			return
+		}
+		o.Evidence, o.EvidenceHash, o.ProofCount = union, hash, len(union)
+		o.Content, o.Source = g.canonical, source
+		if !slices.Contains(pl.proposed, o) {
+			pl.proposed = append(pl.proposed, o)
+		}
+		return
+	}
+	hash := db.EvidenceHash(g.ids)
+	// 使用者停用過完全相同的證據組合就不再重建；有新證據加入（hash 改變）才會重新提出。
+	if pl.rejected[hash] {
+		pl.rejectedN++
+		return
+	}
+	o := &db.Observation{
+		Project: c.Project, Type: c.Type, Content: g.canonical, Evidence: g.ids,
+		EvidenceHash: hash, ProofCount: len(g.ids), Source: source, Active: true,
+	}
+	pl.active = append(pl.active, o)
+	pl.proposed = append(pl.proposed, o)
+}
+
+func (pl *planner) collect(res *Result) {
+	for _, o := range pl.proposed {
+		res.Proposals = append(res.Proposals, *o)
+	}
+	res.Unchanged += pl.unchanged
+	res.Rejected += pl.rejectedN
+}
+
+func overlaps(a, b []int64) bool {
+	for _, id := range b {
+		if slices.Contains(a, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedUnion(a, b []int64) []int64 {
+	out := append(slices.Clone(a), b...)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// Apply 在單一 transaction 寫入 Propose 的提案，回傳每筆 observation id。呼叫前應先寫備份。
+func Apply(d *db.DB, proposals []db.Observation) ([]int64, error) {
+	if len(proposals) == 0 {
+		return nil, nil
+	}
+	return d.SaveObservations(proposals)
+}
+
+// cluster 對所有候選兩兩比較，相似度達門檻就 union，回傳成員數 ≥ 2 的群組（依最舊成員排序）。
+func cluster(cs []db.Candidate, th Thresholds) []Cluster {
+	parent := make([]int, len(cs))
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(i int) int {
+		if parent[i] != i {
+			parent[i] = find(parent[i])
+		}
+		return parent[i]
+	}
+	grams := make([]map[string]bool, len(cs))
+	for i, c := range cs {
+		grams[i] = trigrams(c.Content)
+	}
+	for i := range cs {
+		for j := i + 1; j < len(cs); j++ {
+			if similar(cs[i], cs[j], grams[i], grams[j], th) {
+				parent[find(j)] = find(i)
+			}
+		}
+	}
+	byRoot := make(map[int]int)
+	var out []Cluster
+	for i, c := range cs {
+		r := find(i)
+		idx, ok := byRoot[r]
+		if !ok {
+			idx = len(out)
+			byRoot[r] = idx
+			out = append(out, Cluster{Project: c.Project, Type: c.Type})
+		}
+		out[idx].Members = append(out[idx].Members, c.Memory)
+	}
+	return slices.DeleteFunc(out, func(c Cluster) bool { return len(c.Members) < 2 })
+}
+
+// similar 兩筆都有同模型、同維度的向量時用 cosine，否則用 trigram Jaccard。
+func similar(a, b db.Candidate, ga, gb map[string]bool, th Thresholds) bool {
+	if a.Vector != nil && b.Vector != nil && a.Model == b.Model && len(a.Vector) == len(b.Vector) {
+		return db.CosineSimilarity(a.Vector, b.Vector) >= th.Cosine
+	}
+	return jaccard(ga, gb) >= th.Trigram
+}
+
+// TrigramSimilarity 回傳兩段文字字元 trigram 集合的 Jaccard 相似度（0~1）。以 rune 切分，
+// 中日韓文字不需斷詞也能比較；比較前轉小寫並把連續空白壓成一個空格。
+func TrigramSimilarity(a, b string) float64 {
+	return jaccard(trigrams(a), trigrams(b))
+}
+
+// trigrams 回傳正規化後文字的字元 trigram 集合；不足 3 個 rune 時以整段為唯一元素。
+func trigrams(s string) map[string]bool {
+	s = strings.Join(strings.FieldsFunc(strings.ToLower(s), unicode.IsSpace), " ")
+	r := []rune(s)
+	set := make(map[string]bool)
+	if len(r) == 0 {
+		return set
+	}
+	if len(r) < 3 {
+		set[s] = true
+		return set
+	}
+	for i := 0; i+3 <= len(r); i++ {
+		set[string(r[i:i+3])] = true
+	}
+	return set
+}
+
+func jaccard(a, b map[string]bool) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	inter := 0
+	for g := range a {
+		if b[g] {
+			inter++
+		}
+	}
+	return float64(inter) / float64(len(a)+len(b)-inter)
+}

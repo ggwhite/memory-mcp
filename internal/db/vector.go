@@ -43,6 +43,11 @@ func cosineSimilarity(a, b []float32) float64 {
 	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
+// CosineSimilarity 回傳兩個向量的餘弦相似度；維度不同或任一為零向量時回傳 0。
+func CosineSimilarity(a, b []float32) float64 {
+	return cosineSimilarity(a, b)
+}
+
 // reciprocalRankFusion 合併兩組依名次排序的 ID 清單（各自第一名代表最相關），
 // 用 RRF 公式 score = Σ 1/(rrfK + rank) 計算融合分數，回傳依分數由高到低排序
 // 的 ID 清單。rrfK 是平滑常數（業界慣用值 60）。分數相同時保留 a 優先、原始
