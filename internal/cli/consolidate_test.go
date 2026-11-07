@@ -214,3 +214,13 @@ func TestConsolidateCmdRefusesRemote(t *testing.T) {
 		remoteFlag = ""
 	}
 }
+
+func TestConsolidateBackupPayloadEmptyObservationsIsArray(t *testing.T) {
+	raw, err := json.Marshal(consolidateBackupPayload(nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"observations":[]`) {
+		t.Errorf("backup = %s, want observations as []", raw)
+	}
+}

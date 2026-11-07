@@ -27,6 +27,7 @@ func init() {
 	consolidateCmd.Flags().String("type", consolidate.DefaultType, "memory type to consolidate")
 	consolidateCmd.Flags().Float64("threshold", consolidate.DefaultTrigramThreshold, "character-trigram Jaccard similarity threshold (used when a pair lacks comparable embeddings)")
 	consolidateCmd.Flags().Float64("cosine-threshold", consolidate.DefaultCosineThreshold, "embedding cosine similarity threshold (used when both memories have a vector from the same model)")
+	consolidateCmd.Flags().Int("max-cluster", consolidate.DefaultMaxCluster, "max members per cluster (larger similarity chains are split around seeds)")
 	consolidateCmd.Flags().Bool("apply", false, "write observations (default only prints the plan)")
 
 	observationListCmd.Flags().String("project", "", "limit to one project")
@@ -54,6 +55,7 @@ var consolidateCmd = &cobra.Command{
 		typ, _ := cmd.Flags().GetString("type")
 		trigram, _ := cmd.Flags().GetFloat64("threshold")
 		cosine, _ := cmd.Flags().GetFloat64("cosine-threshold")
+		maxCluster, _ := cmd.Flags().GetInt("max-cluster")
 		apply, _ := cmd.Flags().GetBool("apply")
 		if all == (project != "") {
 			return fmt.Errorf("consolidate: specify exactly one of --project or --all")
@@ -80,7 +82,7 @@ var consolidateCmd = &cobra.Command{
 		defer cancel()
 		res, err := consolidate.Propose(ctx, d, consolidate.Options{
 			Project: project, All: all, Type: typ, LLM: client,
-			Thresholds: consolidate.Thresholds{Trigram: trigram, Cosine: cosine},
+			Thresholds: consolidate.Thresholds{Trigram: trigram, Cosine: cosine}, MaxCluster: maxCluster,
 		})
 		if err != nil {
 			return err
@@ -104,10 +106,7 @@ var consolidateCmd = &cobra.Command{
 			return err
 		}
 		backupDir := filepath.Join(filepath.Dir(resolveDBPath()), "backups")
-		backup, err := compact.WriteJSONBackup(backupDir, "consolidate-"+time.Now().Format("20060102-150405"), map[string]any{
-			"observations": before,
-			"proposals":    res.Proposals,
-		})
+		backup, err := compact.WriteJSONBackup(backupDir, "consolidate-"+time.Now().Format("20060102-150405"), consolidateBackupPayload(before, res.Proposals))
 		if err != nil {
 			return err
 		}
@@ -124,6 +123,14 @@ var consolidateCmd = &cobra.Command{
 		fmt.Fprintf(out, "Wrote %d observations\n", len(ids))
 		return nil
 	},
+}
+
+// consolidateBackupPayload 組備份內容；沒有既有 observation 時寫 [] 而不是 null。
+func consolidateBackupPayload(before, proposals []db.Observation) map[string]any {
+	if before == nil {
+		before = []db.Observation{}
+	}
+	return map[string]any{"observations": before, "proposals": proposals}
 }
 
 // printConsolidatePlan 列出提案（新增或更新既有 o<id>）、LLM 失敗而跳過的群組與合計；plan 與 --apply 都會先印。

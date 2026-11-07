@@ -29,10 +29,20 @@ func CompactLine(m Memory, n int, withProject bool) string {
 }
 
 // ObservationLine 一筆 observation 的單行索引格式：「- o<id> ×<proof_count> <內容> (ev: #a #b)」。
-// 以 o 前綴與記憶的 #id 區分；內容依 n 裁切，證據 id 全列以便追溯。
+// 以 o 前綴與記憶的 #id 區分；內容依 n 裁切，證據 id 依儲存順序（id 由小到大）最多列 maxEvidenceRefs 筆，
+// 其餘以 …+N 表示；儲存的證據不受影響。
 func ObservationLine(o Observation, n int) string {
-	return fmt.Sprintf("- o%d ×%d %s (ev: %s)", o.ID, o.ProofCount, Snippet(o.Content, n), idRefs(o.Evidence))
+	ev := o.Evidence
+	extra := ""
+	if len(ev) > maxEvidenceRefs {
+		extra = fmt.Sprintf(" …+%d", len(ev)-maxEvidenceRefs)
+		ev = ev[:maxEvidenceRefs]
+	}
+	return fmt.Sprintf("- o%d ×%d %s (ev: %s%s)", o.ID, o.ProofCount, Snippet(o.Content, n), idRefs(ev), extra)
 }
+
+// maxEvidenceRefs ObservationLine 最多列出的證據 id 數。
+const maxEvidenceRefs = 8
 
 func idRefs(ids []int64) string {
 	refs := make([]string, len(ids))
