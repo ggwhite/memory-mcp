@@ -2,6 +2,7 @@ package summarize
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ggwhite/memory-mcp/internal/db"
 	"github.com/ggwhite/memory-mcp/internal/hook"
+	"github.com/ggwhite/memory-mcp/internal/llm"
 )
 
 const fixture = `{"type":"mode","sessionId":"s"}
@@ -75,10 +77,10 @@ func setup(t *testing.T, transcript string) (hook.Input, *db.DB) {
 func deps(d db.Store, out string, called *int) Deps {
 	return Deps{
 		Store: d,
-		Run: func(_ context.Context, prompt string) (string, error) {
+		LLM: llm.FuncClient{ID: "fake/m", Fn: func(_ context.Context, req llm.Request) (string, error) {
 			*called++
 			return out, nil
-		},
+		}},
 		Logf: func(string, ...any) {},
 	}
 }
@@ -93,7 +95,7 @@ func TestRunStoresSummary(t *testing.T) {
 	if called != 1 || len(ms) != 1 {
 		t.Fatalf("called=%d stored=%d", called, len(ms))
 	}
-	if ms[0].Project != "globex" || ms[0].Tags != AutoTag || ms[0].Content != "2026-09-28 做了 X" {
+	if ms[0].Project != "globex" || ms[0].Tags != AutoTag || ms[0].Content != "2026-09-28 做了 X" || ms[0].Source != "llm:fake/m" {
 		t.Errorf("got %+v", ms[0])
 	}
 }
@@ -155,5 +157,59 @@ func TestBuildPrompt(t *testing.T) {
 		if !strings.Contains(p, s) {
 			t.Errorf("missing %q", s)
 		}
+	}
+}
+
+func TestRunWithoutLLMLogsAndSkips(t *testing.T) {
+	in, d := setup(t, fixture)
+	var logged []string
+	err := Run(context.Background(), in, Deps{Store: d, Logf: func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}})
+	if err != nil {
+		t.Fatalf("no LLM must not be an error: %v", err)
+	}
+	if ms, _ := d.List(db.ListOptions{Type: "summary"}); len(ms) != 0 {
+		t.Errorf("nothing should be stored: %+v", ms)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "LLM not configured") {
+		t.Errorf("logged = %q", logged)
+	}
+}
+
+func TestRunRequestShape(t *testing.T) {
+	in, d := setup(t, fixture)
+	var got llm.Request
+	Run(context.Background(), in, Deps{Store: d, Logf: func(string, ...any) {}, LLM: llm.FuncClient{ID: "f", Fn: func(_ context.Context, req llm.Request) (string, error) {
+		got = req
+		return "ok", nil
+	}}})
+	if got.Tier != llm.TierCheap || got.MaxTokens == 0 || !strings.Contains(got.Prompt, "<transcript>") {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRunCallsOnStoredOnlyAfterStore(t *testing.T) {
+	in, d := setup(t, fixture)
+	called := 0
+	var gotProject string
+	var gotID int64
+	dp := deps(d, "做了 X", &called)
+	dp.OnStored = func(project string, id int64) { gotProject, gotID = project, id }
+	if err := Run(context.Background(), in, dp); err != nil {
+		t.Fatal(err)
+	}
+	if gotProject != "globex" || gotID != 1 {
+		t.Errorf("OnStored = %q #%d", gotProject, gotID)
+	}
+
+	gotProject = ""
+	skip := deps(d, "SKIP", &called)
+	skip.OnStored = func(project string, id int64) { gotProject = project }
+	in2, d2 := setup(t, fixture)
+	skip.Store = d2
+	Run(context.Background(), in2, skip)
+	if gotProject != "" {
+		t.Errorf("OnStored called on skip")
 	}
 }

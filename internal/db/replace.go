@@ -40,9 +40,9 @@ func (d *DB) storeReplacing(mem *Memory, created string, ids []int64) (int64, er
 		return 0, err
 	}
 	res, err := tx.Exec(
-		`INSERT INTO memories (type, content, tags, project, created)
-		 VALUES (?, ?, ?, ?, COALESCE(NULLIF(?, ''), strftime('%Y-%m-%dT%H:%M:%S','now')))`,
-		mem.Type, clean, mem.Tags, mem.Project, created,
+		`INSERT INTO memories (type, content, tags, project, created, source)
+		 VALUES (?, ?, ?, ?, COALESCE(NULLIF(?, ''), strftime('%Y-%m-%dT%H:%M:%S','now')), ?)`,
+		mem.Type, clean, mem.Tags, mem.Project, created, sourceOrUser(mem.Source),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: %w", err)

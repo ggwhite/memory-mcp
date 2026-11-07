@@ -84,3 +84,19 @@ func TestTimelineLines(t *testing.T) {
 		t.Errorf("lines[2] = %q, want prefix '- #3 '", lines[2])
 	}
 }
+
+func TestObservationLineCapsEvidence(t *testing.T) {
+	ev := make([]int64, 20)
+	for i := range ev {
+		ev[i] = int64(i + 1)
+	}
+	got := ObservationLine(Observation{ID: 3, ProofCount: 20, Content: "規則", Evidence: ev}, 80)
+	want := "- o3 ×20 規則 (ev: #1 #2 #3 #4 #5 #6 #7 #8 …+12)"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	short := ObservationLine(Observation{ID: 1, ProofCount: 2, Content: "規則", Evidence: []int64{1, 2}}, 80)
+	if short != "- o1 ×2 規則 (ev: #1 #2)" {
+		t.Errorf("short = %q", short)
+	}
+}

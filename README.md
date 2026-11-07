@@ -87,6 +87,34 @@ Run one central REST server (`serve --http-api`) and point other machines at it 
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+**Optional LLM**<br>
+Summaries, `compact`, `consolidate` and mental models can use `claude -p`, the Anthropic API, or any OpenAI-compatible server (Ollama, LM Studio, OpenRouter). Paid providers are explicit opt-in, and hooks never call the LLM on the hot path.
+
+</td>
+<td valign="top">
+
+**Consolidate &amp; observations**<br>
+`consolidate` merges near-duplicate feedback into one canonical observation with its evidence ids; it works without an LLM and is undoable with `observation delete`.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Mental models**<br>
+Standing per-project questions (`mental add`) whose answers are rebuilt from your memories and shown in the SessionStart context.
+
+</td>
+<td valign="top">
+
+**Search time filter**<br>
+`search --since/--until` (and `since`/`until` on `memory_search`) limit results by creation time, with relative or absolute bounds.
+
+</td>
+</tr>
 </table>
 
 ## Quick start
@@ -249,7 +277,7 @@ Each hook reads the Claude Code hook JSON from stdin (`session_id`, `cwd`, `prom
 
 - **`context --hook`** prints an index of: global feedback (`project=global`), the project's feedback, its 3 latest summaries, and other til/knowledge — capped at 6,000 characters (til/knowledge is trimmed first, feedback last). In a `personal-*` project or the `home` directory, only global feedback is injected. Memories with an empty project are never injected.
 - **`recall --hook`** extracts query terms from the prompt (alphanumeric runs of 3+ chars and overlapping 3-character CJK windows), runs an FTS5 query, and prints at most 3 index lines that pass a conservative relevance threshold. Thresholds use the raw score; for ordering only, `summary` memories decay with age (see [Memory hygiene](#memory-hygiene)). Prompts shorter than 4 characters or starting with `/` are skipped, memories already injected in the same session are not repeated, and the whole command is bounded to 300 ms. It only queries the local DB (no embeddings) and does not support `--remote`.
-- **`summarize --hook`** forks a background worker and returns immediately. The worker reads the transcript and shells out to `claude -p --model haiku` to write a summary, stored as type `summary` with tag `auto-summary`. It skips sessions with fewer than 3 user turns or where a summary was already stored manually. Logs go to `summarize.log` next to the database.
+- **`summarize --hook`** forks a background worker and returns immediately. The worker reads the transcript and asks the configured [LLM](#optional-llm) (by default `claude -p --model haiku`) to write a summary, stored as type `summary` with tag `auto-summary`. It skips sessions with fewer than 3 user turns or where a summary was already stored manually. If no LLM is configured it logs `skip: LLM not configured` and exits 0. Logs go to `summarize.log` next to the database.
 
 <details>
 <summary><b>Project derivation</b></summary>
@@ -289,6 +317,15 @@ ollama pull bge-m3      # default embedding model
 memory-mcp reindex      # backfill embeddings for existing memories; safe to re-run
 ```
 
+### Time filter: `--since` / `--until`
+
+Both bounds filter on the creation time and apply to the FTS5 and vector branches alike. Each takes a relative age (`Nh`, `Nd`, `Nw`) or an absolute date (`YYYY-MM-DD`); `--until` with a date includes that whole day. A bad format is an error. The MCP `memory_search` tool takes the same values as `since` / `until`. Hook recall is not affected.
+
+```bash
+memory-mcp search --since 7d "deploy"                          # last 7 days
+memory-mcp search --since 2026-10-01 --until 2026-10-31 "auth" # October, inclusive
+```
+
 ## Memory hygiene
 
 A memory store is only useful if it stays correct. Three mechanisms keep old or contradictory memories from crowding out the current ones.
@@ -311,6 +348,98 @@ When `recall --hook` orders its matches, `summary` memories decay with age (half
 
 `compact` selects `summary` memories older than `--older-than` (default `60d`) and groups them by project and month; only groups of 2+ are merged. With `--apply` it first writes every row it will delete to `backups/compact-<YYYYMMDD-HHMMSS>.json` next to the database (same format as `export`), then for each group asks `claude -p --model haiku` for one merged summary (done / key decisions / still unfinished, keeping `#id` references). The merged memory is tagged `compacted,month:YYYY-MM`, keeps the newest original's `created`, and replaces the originals in one transaction. A group whose LLM call fails or returns nothing is skipped and left untouched. Local DB only.
 
+## Optional LLM
+
+The LLM is optional: storing, searching, listing and the hooks' `context` / `recall` work without one. It is used only by `summarize` (session summaries), `compact`, `consolidate` and `mental build`. Writes (`store`) never wait for an LLM, and `context --hook` / `recall --hook` never call it.
+
+| Provider | Value | Notes |
+|----------|-------|-------|
+| Claude CLI | `claude-cli` | Runs `claude -p` with models `haiku` (cheap) and `sonnet` (synth). Uses your Claude subscription; no API key. |
+| Anthropic API | `anthropic` | Direct HTTPS calls, defaults `claude-haiku-5-5` / `claude-sonnet-5-5`. Needs an API key. |
+| OpenAI-compatible | `openai` | OpenAI, or any compatible server via `MEMORY_MCP_LLM_BASE_URL`: Ollama (`http://localhost:11434/v1`), LM Studio, OpenRouter. Both model variables are required. |
+
+```bash
+# Ollama, fully local
+export MEMORY_MCP_LLM_PROVIDER=openai
+export MEMORY_MCP_LLM_BASE_URL=http://localhost:11434/v1
+export MEMORY_MCP_LLM_MODEL_CHEAP=qwen3:8b MEMORY_MCP_LLM_MODEL_SYNTH=qwen3:8b
+
+# Anthropic API
+export MEMORY_MCP_LLM_PROVIDER=anthropic MEMORY_MCP_LLM_API_KEY=sk-ant-...
+
+memory-mcp llm status   # resolved provider, models, today's call budget; never prints the key
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_MCP_LLM_PROVIDER` | unset | `anthropic`, `openai`, `claude-cli`, or `off`. |
+| `MEMORY_MCP_LLM_API_KEY` | — | API key. When empty, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` is used, **only** for the provider you named. |
+| `MEMORY_MCP_LLM_BASE_URL` | `https://api.anthropic.com` / `https://api.openai.com/v1` | Override the API base. With `openai`, a custom base may omit the key (local servers). |
+| `MEMORY_MCP_LLM_MODEL_CHEAP` | `claude-haiku-5-5` (anthropic), `haiku` (claude-cli) | Model for cheap tasks (classify, dedup). Required for `openai`. |
+| `MEMORY_MCP_LLM_MODEL_SYNTH` | `claude-sonnet-5-5` (anthropic), `sonnet` (claude-cli) | Model for summaries and mental models. Required for `openai`. |
+| `MEMORY_MCP_LLM_DAILY_CALLS` | `50` | Daily call budget; `0` means unlimited. Over budget, the call is skipped and logged. |
+| `MEMORY_MCP_LLM_CLAUDE_KEEP_API_KEY` | unset | Set to `1` to keep `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` in the `claude -p` child process. By default they are removed so `claude -p` uses your subscription instead of silently billing a key. |
+
+**Resolution order:**
+
+1. `MEMORY_MCP_LLM_PROVIDER` set to a provider: use it; a missing key (anthropic) or missing models (openai) is an error naming the variable.
+2. `MEMORY_MCP_LLM_PROVIDER=off`: no LLM.
+3. Unset: `claude-cli` if `claude` is on `PATH`, otherwise no LLM.
+
+A paid provider is used only when it is named. An `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` that merely exists in your environment never triggers billing. Prompts sent to the network providers go through the same secret redaction as writes.
+
+Claude Max / Ultra subscribers get a monthly Console API credit that works with an `sk-ant-` API key, so the `anthropic` provider can use it. The OAuth token of a Claude plan must not be used by third-party tools; use `claude-cli` or an API key instead.
+
+## Consolidate & observations
+
+Agents tend to store the same correction many times. `consolidate` groups near-duplicate memories of one type (default `feedback`) inside a project and turns each group into a single **observation**: one canonical sentence plus the ids of the memories it came from (its evidence) and a `×N` proof count.
+
+```bash
+memory-mcp consolidate --project my-app            # plan only: print proposed observations
+memory-mcp consolidate --all --apply               # backup, then write observations
+memory-mcp consolidate --project my-app --type feedback --threshold 0.35 --cosine-threshold 0.85
+
+memory-mcp observation list --project my-app
+memory-mcp observation delete o3                   # accepts 3 or o3
+```
+
+Flags: `--project <p>` or `--all`, `--type` (default `feedback`), `--threshold` (character-trigram Jaccard, default `0.35`), `--cosine-threshold` (used when both memories have a vector from the same model, default `0.85`), `--max-cluster` (max members per cluster; larger similarity chains are split around seeds, default `20`), and `--apply`. The default run only prints the plan and changes nothing; `--apply` first writes a JSON backup next to the database (same pattern as `compact`). Re-running refines an existing observation whose evidence overlaps instead of creating a duplicate, and skips groups whose evidence is unchanged. Local DB only (`--remote` is refused).
+
+- **With an LLM** (cheap tier), the model decides which members state the same rule and writes the canonical sentence in their dominant language; the observation's `source` is `llm:<provider/model>`.
+- **Without an LLM**, the canonical text is the newest member's content and `source` is `heuristic`; the output says `LLM: not configured ..., using heuristic`.
+
+**In context:** `SessionStart` shows `### 全域 observations` and `### <project> observations` first, one line each: `- o3 ×2 <canonical> (ev: #1 #2)`. Memories that are evidence of an active observation are dropped from the raw feedback sections. With no observations the output is unchanged.
+
+**Undo:** evidence memories are hidden, never deleted. `memory-mcp observation delete <id>` deactivates the observation and its evidence shows up in context again.
+
+## Mental models
+
+A mental model is a standing question about a project ("How do we deploy?", "What auth approach did we pick?"). `mental build` answers it from the project's memories with the LLM (synth tier) and stores the answer, so the SessionStart hook only reads a table and never calls the LLM.
+
+```bash
+memory-mcp mental add --project my-app "How do we deploy this service?"
+memory-mcp mental list --project my-app
+memory-mcp mental build --project my-app           # or --all; --force rebuilds even with no new memories
+memory-mcp mental rm m3                            # accepts 3 or m3
+```
+
+The build input is the project's active observations, the top 20 memories matching the question (full-phrase search first, then one search per word, which helps natural-language and unspaced CJK questions), the 5 newest summaries, and, when those run thin, the newest `til` / `knowledge` notes, all deduplicated and capped at about 12,000 characters. The answer is at most 12 lines in the memories' language and cites sources as `#id` / `o<id>`. A project is skipped when it has no memory newer than the last build, unless `--force`. A failed or empty answer keeps the previous one.
+
+**In context:** `SessionStart` adds a `### <project> mental models` section after the global observations and feedback and before the project's feedback; each model renders as `**Q:** question` followed by its answer lines, trimmed by the same budget as other sections. With no models the output is unchanged. When a `SessionEnd` summary is written and the project has mental models, the same background worker runs the incremental build; failures are only logged.
+
+**No LLM:** `mental build` prints `LLM not configured (...), nothing built` and exits 0; `add`, `list` and `rm` still work. **Undo:** `mental rm <id>` deletes the model. Local DB only.
+
+### Nightly run
+
+Keep observations and mental models fresh with a scheduled job:
+
+```cron
+# every night at 03:30
+30 3 * * * { memory-mcp consolidate --all --apply && memory-mcp mental build --all; } >> ~/.local/share/memory-mcp/nightly.log 2>&1
+```
+
+On macOS, put the same command in a launchd agent (`~/Library/LaunchAgents/com.example.memory-mcp-nightly.plist`) with `ProgramArguments` of `/bin/sh -c "{ memory-mcp consolidate --all --apply && memory-mcp mental build --all; } >> ~/.local/share/memory-mcp/nightly.log 2>&1"` (or set `StandardOutPath` / `StandardErrorPath` to the log instead of redirecting) and a `StartCalendarInterval` of `Hour` 3 / `Minute` 30; use the absolute path of the binary, since launchd does not load your shell `PATH`. Mind `MEMORY_MCP_LLM_DAILY_CALLS` if you have many projects.
+
 ## CLI
 
 ```bash
@@ -324,6 +453,7 @@ memory-mcp store -t feedback --project global --supersedes 12,34 "Corrected rule
 memory-mcp search "trigram"
 memory-mcp search "全文搜索"
 memory-mcp search --compact --type til -n 10 "redis"
+memory-mcp search --since 7d --until 2026-11-01 "deploy"   # time filter: Nh, Nd, Nw or YYYY-MM-DD
 
 # Browse
 memory-mcp list --type summary --since 7d -n 20
@@ -341,6 +471,12 @@ memory-mcp compact                                  # dry run: list groups, chan
 memory-mcp compact --older-than 90d --project my-app
 memory-mcp compact --apply                          # backup, merge with claude -p, delete originals
 
+# Observations, mental models, LLM
+memory-mcp consolidate --all --apply
+memory-mcp observation list
+memory-mcp mental build --all
+memory-mcp llm status
+
 # Backup
 memory-mcp export > backup.json
 memory-mcp import backup.json
@@ -352,6 +488,8 @@ memory-mcp serve --http-api 127.0.0.1:8766 # REST API for --remote clients
 ```
 
 Global flags: `--json` (JSON output), `--db <path>`, `--remote <url>`.
+
+Every memory carries a `source` provenance field (shown in `--json` output, kept by `export` / `import`): `user` for memories you or an agent stored (also the default for old exports), `llm:<provider/model>` for summaries written by the SessionEnd worker, and `compact` for `compact` roll-ups.
 
 <details>
 <summary><b>Remote mode</b></summary>
@@ -367,7 +505,7 @@ export MEMORY_MCP_REMOTE=http://127.0.0.1:8766
 memory-mcp search "trigram"
 ```
 
-Clients do not need Ollama; embeddings are computed on the central host. `reindex`, `compact`, and `recall --hook` always operate on the local database (`compact` refuses `--remote`). The REST API has no authentication, so bind it to localhost or a private network.
+Clients do not need Ollama; embeddings are computed on the central host. `reindex`, `compact`, and `recall --hook` always operate on the local database (`compact`, `consolidate`, `observation`, `mental` and `llm status` refuse `--remote`). The REST API has no authentication, so bind it to localhost or a private network.
 
 </details>
 

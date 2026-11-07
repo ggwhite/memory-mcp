@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ggwhite/memory-mcp/internal/db"
-	"github.com/ggwhite/memory-mcp/internal/summarize"
+	"github.com/ggwhite/memory-mcp/internal/llm"
 )
 
 const (
@@ -24,6 +24,10 @@ const (
 	DefaultMaxInputRunes = 80000
 	// Tag 合併後記憶的固定 tag，另加 month:YYYY-MM。
 	Tag = "compacted"
+	// Source 合併後記憶的 source 欄位值。
+	Source = "compact"
+	// rollupMaxTokens 1500 字繁中彙整約 3000 token，留餘裕。
+	rollupMaxTokens = 4096
 )
 
 // Group 同一 project、同一月份（依 created 的 UTC 年月）的 summary，Memories 依 created 由舊到新。
@@ -90,7 +94,13 @@ func WriteBackup(dir string, groups []Group, now time.Time) (string, error) {
 	for _, g := range groups {
 		memories = append(memories, g.Memories...)
 	}
-	data, err := json.MarshalIndent(memories, "", "  ")
+	return WriteJSONBackup(dir, "compact-"+now.Format("20060102-150405"), memories)
+}
+
+// WriteJSONBackup 把 v 以縮排 JSON 寫到 dir/<base>.json；同名已存在則改 <base>-1.json、-2…，絕不覆蓋。
+// 回傳檔案路徑。compact 與 consolidate 共用同一個備份目錄與命名規則。
+func WriteJSONBackup(dir, base string, v any) (string, error) {
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("backup marshal: %w", err)
 	}
@@ -98,7 +108,6 @@ func WriteBackup(dir string, groups []Group, now time.Time) (string, error) {
 		return "", fmt.Errorf("backup dir: %w", err)
 	}
 	// O_EXCL 保證不覆蓋既有備份：撞名時在檔名後加 -1、-2…。
-	base := "compact-" + now.Format("20060102-150405")
 	for i := 0; ; i++ {
 		name := base + ".json"
 		if i > 0 {
@@ -125,7 +134,7 @@ func WriteBackup(dir string, groups []Group, now time.Time) (string, error) {
 
 // Deps Apply 的外部依賴，測試時可替換。
 type Deps struct {
-	Run           summarize.Runner
+	LLM           llm.Client
 	Logf          func(format string, args ...any) // nil 則不記錄
 	MaxInputRunes int                              // 0 用 DefaultMaxInputRunes
 }
@@ -151,7 +160,7 @@ func Apply(ctx context.Context, d *db.DB, groups []Group, deps Deps) []Outcome {
 	out := make([]Outcome, 0, len(groups))
 	for _, g := range groups {
 		o := Outcome{Group: g}
-		o.NewID, o.Err = applyGroup(ctx, d, g, deps.Run, maxRunes)
+		o.NewID, o.Err = applyGroup(ctx, d, g, deps.LLM, maxRunes)
 		if o.Err != nil {
 			logf("compact %s %s: skipped: %v", g.Project, g.Month, o.Err)
 		}
@@ -160,7 +169,7 @@ func Apply(ctx context.Context, d *db.DB, groups []Group, deps Deps) []Outcome {
 	return out
 }
 
-func applyGroup(ctx context.Context, d *db.DB, g Group, run summarize.Runner, maxRunes int) (int64, error) {
+func applyGroup(ctx context.Context, d *db.DB, g Group, run llm.Client, maxRunes int) (int64, error) {
 	inputs := make([]string, len(g.Memories))
 	for i, m := range g.Memories {
 		inputs[i] = fmt.Sprintf("#%d（%s）\n%s", m.ID, m.Created.UTC().Format("2006-01-02"), m.Content)
@@ -173,6 +182,7 @@ func applyGroup(ctx context.Context, d *db.DB, g Group, run summarize.Runner, ma
 		Type:    "summary",
 		Project: g.Project,
 		Tags:    Tag + ",month:" + g.Month,
+		Source:  Source,
 		Content: header(g) + "\n" + body,
 		Created: g.Memories[len(g.Memories)-1].Created,
 	}
@@ -180,7 +190,7 @@ func applyGroup(ctx context.Context, d *db.DB, g Group, run summarize.Runner, ma
 }
 
 // rollup 輸入合計不超過 maxRunes 就直接交給 LLM；否則分段各自彙整，再把各段結果彙整成一筆。
-func rollup(ctx context.Context, g Group, inputs []string, run summarize.Runner, maxRunes int) (string, error) {
+func rollup(ctx context.Context, g Group, inputs []string, run llm.Client, maxRunes int) (string, error) {
 	chunks := splitChunks(inputs, maxRunes)
 	if len(chunks) == 1 {
 		return runOnce(ctx, run, BuildPrompt(g.Project, g.Month, chunks[0]))
@@ -200,8 +210,9 @@ func rollup(ctx context.Context, g Group, inputs []string, run summarize.Runner,
 	return rollup(ctx, g, parts, run, maxRunes)
 }
 
-func runOnce(ctx context.Context, run summarize.Runner, prompt string) (string, error) {
-	res, err := run(ctx, prompt)
+func runOnce(ctx context.Context, run llm.Client, prompt string) (string, error) {
+	// 沿用 cheap tier（claude-cli 預設 haiku），維持既有 compact 的成本與速度。
+	res, err := run.Complete(ctx, llm.Request{Prompt: prompt, Tier: llm.TierCheap, MaxTokens: rollupMaxTokens})
 	if err != nil {
 		return "", err
 	}

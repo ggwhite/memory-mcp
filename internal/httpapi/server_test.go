@@ -221,3 +221,50 @@ func TestStoreOmitsDeletedWhenNoSupersedes(t *testing.T) {
 		t.Errorf("body = %v, want no deleted key", body)
 	}
 }
+
+func TestClientCarriesSource(t *testing.T) {
+	c, _ := testClient(t)
+	id, err := c.Store(&db.Memory{Type: "summary", Content: "LLM 摘要", Project: "p", Source: "llm:anthropic/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Get(id)
+	if err != nil || got.Source != "llm:anthropic/x" {
+		t.Fatalf("Get source = %q, err %v", got.Source, err)
+	}
+	if _, err := c.ImportBatch([]db.Memory{{Type: "til", Content: "舊匯出"}, {Type: "summary", Content: "合併", Project: "p", Source: "compact"}}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := c.ExportAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"LLM 摘要": "llm:anthropic/x", "舊匯出": "user", "合併": "compact"}
+	for _, m := range all {
+		if m.Source != want[m.Content] {
+			t.Errorf("%q source = %q, want %q", m.Content, m.Source, want[m.Content])
+		}
+	}
+}
+
+// REST 往返：client 把 Since / Until 帶進 query string，server 再傳給 store。
+func TestClientSearchSinceUntil(t *testing.T) {
+	c, d := testClient(t)
+	d.Store(&db.Memory{Type: "til", Content: "gamma entry"})
+
+	got, err := c.Search(db.SearchOptions{Query: "gamma", Since: "7d"})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("since=7d: got %v, err %v; want 1 hit", got, err)
+	}
+	got, err = c.Search(db.SearchOptions{Query: "gamma", Until: "2020-01-10"})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("until=2020-01-10: got %v, err %v; want 0 hits", got, err)
+	}
+	got, err = c.Search(db.SearchOptions{Query: "gamma", Since: "2999-01-01"})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("since=2999-01-01: got %v, err %v; want 0 hits", got, err)
+	}
+	if _, err := c.Search(db.SearchOptions{Query: "gamma", Since: "nope"}); err == nil {
+		t.Error("bad since should return an error")
+	}
+}

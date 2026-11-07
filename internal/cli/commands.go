@@ -104,6 +104,8 @@ func init() {
 
 	searchCmd.Flags().String("type", "", "filter by memory type")
 	searchCmd.Flags().IntP("limit", "n", 5, "max results")
+	searchCmd.Flags().String("since", "", "only memories created at/after: Nh, Nd, Nw or YYYY-MM-DD")
+	searchCmd.Flags().String("until", "", "only memories created at/before: Nh, Nd, Nw or YYYY-MM-DD (inclusive of that day)")
 	searchCmd.Flags().Bool("compact", false, "print one index line per result")
 
 	listCmd.Flags().String("type", "", "filter by memory type")
@@ -184,6 +186,8 @@ var searchCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		typ, _ := cmd.Flags().GetString("type")
 		limit, _ := cmd.Flags().GetInt("limit")
+		since, _ := cmd.Flags().GetString("since")
+		until, _ := cmd.Flags().GetString("until")
 
 		d, err := openStore()
 		if err != nil {
@@ -192,7 +196,7 @@ var searchCmd = &cobra.Command{
 		defer d.Close()
 
 		results, err := d.Search(db.SearchOptions{
-			Query: args[0], Type: typ, Limit: limit,
+			Query: args[0], Type: typ, Limit: limit, Since: since, Until: until,
 		})
 		if err != nil {
 			return err
@@ -524,14 +528,29 @@ func runSummarizeWorker(file string) {
 	}
 	defer d.Close()
 
+	// 每日次數上限記在本機 DB；--remote 時沒有本機 DB，不計次數。
+	local, _ := d.(*db.DB)
+	client, err := summarizeLLM(local)
+	if err != nil {
+		summarizeLogf("%s - worker: llm config: %v", in.SessionID, err)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	summarize.Run(ctx, in, summarize.Deps{
 		Store: d,
-		Run:   summarize.ClaudeRunner,
+		LLM:   client,
 		Logf:  summarizeLogf,
+		// summary 寫入後在同一個背景 worker 內做增量 mental build，hook 前景路徑不受影響。
+		OnStored: func(project string, _ int64) {
+			buildMentalAfterSummary(local, client, project, in.SessionID)
+		},
 	})
 }
+
+// summarizeLLM 建立 SessionEnd worker 用的 LLM client，測試時替換成假實作。
+var summarizeLLM = resolveLLM
 
 var getCmd = &cobra.Command{
 	Use:   "get <id>...",
