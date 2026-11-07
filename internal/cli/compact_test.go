@@ -9,7 +9,17 @@ import (
 	"time"
 
 	"github.com/ggwhite/memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/llm"
 )
+
+// fakeCompactLLM 讓 compact 指令改用只看 prompt 的假 LLM。
+func fakeCompactLLM(run func(context.Context, string) (string, error)) func(*db.DB) (llm.Client, error) {
+	return func(*db.DB) (llm.Client, error) {
+		return llm.FuncClient{ID: "fake", Fn: func(ctx context.Context, req llm.Request) (string, error) {
+			return run(ctx, req.Prompt)
+		}}, nil
+	}
+}
 
 // seedCompactDB 建立含一組可合併的舊 summary（2 筆）與一筆近期 summary 的 DB。
 func seedCompactDB(t *testing.T) string {
@@ -36,12 +46,12 @@ func seedCompactDB(t *testing.T) string {
 }
 
 func resetCompactFlags(t *testing.T) {
-	orig := compactRunner
+	orig := compactLLM
 	t.Cleanup(func() {
 		compactCmd.Flags().Set("apply", "false")
 		compactCmd.Flags().Set("project", "")
 		compactCmd.Flags().Set("older-than", "60d")
-		compactRunner = orig
+		compactLLM = orig
 		remoteFlag = ""
 	})
 }
@@ -60,10 +70,10 @@ func exportCount(t *testing.T, path string) []db.Memory {
 func TestCompactCmdDryRun(t *testing.T) {
 	path := seedCompactDB(t)
 	resetCompactFlags(t)
-	compactRunner = func(context.Context, string) (string, error) {
+	compactLLM = fakeCompactLLM(func(context.Context, string) (string, error) {
 		t.Fatal("dry run must not call the LLM")
 		return "", nil
-	}
+	})
 	if err := runCLI(t, path, "compact"); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +88,7 @@ func TestCompactCmdDryRun(t *testing.T) {
 func TestCompactCmdApply(t *testing.T) {
 	path := seedCompactDB(t)
 	resetCompactFlags(t)
-	compactRunner = func(context.Context, string) (string, error) { return "合併", nil }
+	compactLLM = fakeCompactLLM(func(context.Context, string) (string, error) { return "合併", nil })
 	if err := runCLI(t, path, "compact", "--apply"); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +118,7 @@ func TestCompactCmdRefusesRemote(t *testing.T) {
 func TestCompactCmdAllSkippedPrintsErrorOnce(t *testing.T) {
 	path := seedCompactDB(t)
 	resetCompactFlags(t)
-	compactRunner = func(context.Context, string) (string, error) { return "", os.ErrInvalid }
+	compactLLM = fakeCompactLLM(func(context.Context, string) (string, error) { return "", os.ErrInvalid })
 
 	var errBuf strings.Builder
 	t.Setenv("MEMORY_MCP_REMOTE", "")
@@ -137,5 +147,21 @@ func TestCompactCmdRejectsNonPositiveOlderThan(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "must be positive") {
 			t.Errorf("--older-than %s: err = %v, want positive-duration error", v, err)
 		}
+	}
+}
+
+func TestCompactCmdApplyWithoutLLM(t *testing.T) {
+	path := seedCompactDB(t)
+	resetCompactFlags(t)
+	compactLLM = func(*db.DB) (llm.Client, error) { return nil, nil }
+	err := runCLI(t, path, "compact", "--apply")
+	if err == nil || !strings.Contains(err.Error(), "LLM not configured") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := len(exportCount(t, path)); n != 3 {
+		t.Errorf("memories = %d, want 3 (nothing changed)", n)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "backups")); !os.IsNotExist(err) {
+		t.Errorf("no backup should be written without an LLM: %v", err)
 	}
 }

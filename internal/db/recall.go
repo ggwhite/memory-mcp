@@ -299,7 +299,7 @@ func (d *DB) recallCandidates(ctx context.Context, opts RecallOptions) ([]Recall
 		phrases[i] = ftsQuery(t)
 	}
 	query := `
-		SELECT m.id, m.type, m.content, m.tags, m.project, m.created, m.updated, f.rank
+		SELECT m.id, m.type, m.content, m.tags, m.project, m.created, m.updated, m.source, f.rank
 		FROM memories_fts f
 		JOIN memories m ON m.id = f.rowid
 		WHERE memories_fts MATCH ?`
@@ -322,7 +322,7 @@ func (d *DB) recallCandidates(ctx context.Context, opts RecallOptions) ([]Recall
 		var r RecallResult
 		var created, updated string
 		var rank float64
-		if err := rows.Scan(&r.ID, &r.Type, &r.Content, &r.Tags, &r.Project, &created, &updated, &rank); err != nil {
+		if err := rows.Scan(&r.ID, &r.Type, &r.Content, &r.Tags, &r.Project, &created, &updated, &r.Source, &rank); err != nil {
 			return nil, fmt.Errorf("recall scan: %w", err)
 		}
 		r.Created, _ = time.Parse(timeLayout, created)

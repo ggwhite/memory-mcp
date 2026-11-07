@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/ggwhite/memory-mcp/internal/db"
 	"github.com/ggwhite/memory-mcp/internal/hook"
+	"github.com/ggwhite/memory-mcp/internal/llm"
 )
 
 const (
@@ -17,15 +17,14 @@ const (
 	MinUserTurns       = 3
 	AutoTag            = "auto-summary"
 	skipToken          = "SKIP"
+	// summaryMaxTokens 600 字繁中摘要約 1200 token，留餘裕。
+	summaryMaxTokens = 2048
 )
 
-// Runner 把 prompt 交給 LLM 並回傳輸出。
-type Runner func(ctx context.Context, prompt string) (string, error)
-
-// Deps Run 的外部依賴，測試時可替換。
+// Deps Run 的外部依賴，測試時可替換。LLM 為 nil 表示沒有設定 LLM，Run 只記 log 並跳過。
 type Deps struct {
 	Store db.Store
-	Run   Runner
+	LLM   llm.Client
 	Logf  func(format string, args ...any)
 }
 
@@ -51,6 +50,10 @@ func Run(ctx context.Context, in hook.Input, deps Deps) error {
 	project := hook.Project(in.Cwd)
 	logf := func(format string, args ...any) {
 		deps.Logf(in.SessionID+" "+project+" "+format, args...)
+	}
+	if deps.LLM == nil {
+		logf("skip: LLM not configured")
+		return nil
 	}
 
 	f, err := os.Open(in.TranscriptPath)
@@ -86,9 +89,14 @@ func Run(ctx context.Context, in hook.Input, deps Deps) error {
 	if date.IsZero() {
 		date = time.Now()
 	}
-	out, err := deps.Run(ctx, BuildPrompt(project, date.Local(), tr.Text))
+	// 沿用 cheap tier（claude-cli 預設 haiku），維持既有 SessionEnd 摘要的成本與速度。
+	out, err := deps.LLM.Complete(ctx, llm.Request{
+		Prompt:    BuildPrompt(project, date.Local(), tr.Text),
+		Tier:      llm.TierCheap,
+		MaxTokens: summaryMaxTokens,
+	})
 	if err != nil {
-		logf("runner: %v", err)
+		logf("llm %s: %v", deps.LLM.Name(), err)
 		return err
 	}
 	out = strings.TrimSpace(out)
@@ -97,23 +105,11 @@ func Run(ctx context.Context, in hook.Input, deps Deps) error {
 		return nil
 	}
 
-	id, err := deps.Store.Store(&db.Memory{Type: "summary", Content: out, Tags: AutoTag, Project: project})
+	id, err := deps.Store.Store(&db.Memory{Type: "summary", Content: out, Tags: AutoTag, Project: project, Source: "llm:" + deps.LLM.Name()})
 	if err != nil {
 		logf("store: %v", err)
 		return err
 	}
 	logf("stored #%d", id)
 	return nil
-}
-
-// ClaudeRunner 以 claude -p（haiku、不保存 session）產生摘要，並設定防遞迴環境變數。
-func ClaudeRunner(ctx context.Context, prompt string) (string, error) {
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", "haiku", "--no-session-persistence", "--tools", "", "--strict-mcp-config")
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Env = append(os.Environ(), hook.SummarizingEnv+"=1")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("claude -p: %w", err)
-	}
-	return string(out), nil
 }

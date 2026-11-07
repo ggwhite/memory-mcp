@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/ggwhite/memory-mcp/internal/compact"
-	"github.com/ggwhite/memory-mcp/internal/summarize"
+	"github.com/ggwhite/memory-mcp/internal/llm"
 
 	"github.com/spf13/cobra"
 )
 
-// compactRunner 產生月度彙整用的 LLM runner，測試時替換成假實作。
-var compactRunner summarize.Runner = summarize.ClaudeRunner
+// compactLLM 建立月度彙整用的 LLM client，測試時替換成假實作。
+var compactLLM = resolveLLM
 
 func init() {
 	compactCmd.Flags().String("older-than", "60d", "only compact summaries created before this age (Nd format)")
@@ -52,6 +52,13 @@ var compactCmd = &cobra.Command{
 		if len(groups) == 0 {
 			return nil
 		}
+		client, err := compactLLM(d)
+		if err != nil {
+			return err
+		}
+		if client == nil {
+			return fmt.Errorf("compact: LLM not configured (%s)", llm.DisabledReason(os.Getenv))
+		}
 
 		// 任何變更之前先備份所有即將被刪除的記憶。
 		backupDir := filepath.Join(filepath.Dir(resolveDBPath()), "backups")
@@ -64,7 +71,7 @@ var compactCmd = &cobra.Command{
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 		outcomes := compact.Apply(ctx, d, groups, compact.Deps{
-			Run:  compactRunner,
+			LLM:  client,
 			Logf: func(format string, args ...any) { fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...) },
 		})
 		var merged, deleted, skipped int

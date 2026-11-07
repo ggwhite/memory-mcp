@@ -95,7 +95,7 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 // ftsSearch 使用 FTS5 全文搜索記憶，依相關度排序。
 func (d *DB) ftsSearch(opts SearchOptions, limit int) ([]SearchResult, error) {
 	query := `
-		SELECT m.id, m.type, m.content, m.tags, m.project, m.created, m.updated, f.rank
+		SELECT m.id, m.type, m.content, m.tags, m.project, m.created, m.updated, m.source, f.rank
 		FROM memories_fts f
 		JOIN memories m ON m.id = f.rowid
 		WHERE memories_fts MATCH ?`
@@ -119,7 +119,7 @@ func (d *DB) ftsSearch(opts SearchOptions, limit int) ([]SearchResult, error) {
 	for rows.Next() {
 		var r SearchResult
 		var created, updated string
-		if err := rows.Scan(&r.ID, &r.Type, &r.Content, &r.Tags, &r.Project, &created, &updated, &r.Rank); err != nil {
+		if err := rows.Scan(&r.ID, &r.Type, &r.Content, &r.Tags, &r.Project, &created, &updated, &r.Source, &r.Rank); err != nil {
 			return nil, fmt.Errorf("search scan: %w", err)
 		}
 		r.Created, _ = time.Parse(timeLayout, created)

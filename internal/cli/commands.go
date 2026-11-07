@@ -524,11 +524,19 @@ func runSummarizeWorker(file string) {
 	}
 	defer d.Close()
 
+	// 每日次數上限記在本機 DB；--remote 時沒有本機 DB，不計次數。
+	local, _ := d.(*db.DB)
+	client, err := resolveLLM(local)
+	if err != nil {
+		summarizeLogf("%s - worker: llm config: %v", in.SessionID, err)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	summarize.Run(ctx, in, summarize.Deps{
 		Store: d,
-		Run:   summarize.ClaudeRunner,
+		LLM:   client,
 		Logf:  summarizeLogf,
 	})
 }

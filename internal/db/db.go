@@ -26,6 +26,8 @@ type Memory struct {
 	Created  time.Time `json:"created"`
 	Updated  time.Time `json:"updated"`
 	Redacted int       `json:"redacted,omitempty"`
+	// Source 記憶的來源：user（預設）、llm:<provider/model>（LLM 產生）、compact（月度彙整）。
+	Source string `json:"source,omitempty"`
 	// Supersedes 只在 Store 時使用：這筆新記憶取代的舊記憶 id，會在同一個 transaction 內刪除。
 	Supersedes []int64 `json:"supersedes,omitempty"`
 }
@@ -78,7 +80,8 @@ CREATE TABLE IF NOT EXISTS memories (
     tags     TEXT NOT NULL DEFAULT '',
     project  TEXT NOT NULL DEFAULT '',
     created  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
-    updated  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now'))
+    updated  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+    source   TEXT NOT NULL DEFAULT 'user'
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -110,7 +113,23 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
     model     TEXT NOT NULL,
     created   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now'))
 );
+
+CREATE TABLE IF NOT EXISTS llm_usage (
+    day   TEXT PRIMARY KEY,
+    calls INTEGER NOT NULL DEFAULT 0
+);
 `
+
+// sourceUser 未指定來源時的預設值（使用者／agent 手動寫入）。
+const sourceUser = "user"
+
+// sourceOrUser 空字串視為 user，讓舊版 export 與一般 Store 都落在預設來源。
+func sourceOrUser(s string) string {
+	if s == "" {
+		return sourceUser
+	}
+	return s
+}
 
 const timeLayout = "2006-01-02T15:04:05"
 
@@ -130,7 +149,36 @@ func Open(path string) (*DB, error) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := addColumnIfMissing(sqlDB, "memories", "source", `TEXT NOT NULL DEFAULT 'user'`); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return &DB{db: sqlDB}, nil
+}
+
+// addColumnIfMissing 舊 DB 的 table 缺少 column 時以 ALTER TABLE 補上；既有資料列取得 DEFAULT 值。
+func addColumnIfMissing(sqlDB *sql.DB, table, column, def string) error {
+	rows, err := sqlDB.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return fmt.Errorf("table info %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("table info %s: %w", table, err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("table info %s: %w", table, err)
+	}
+	if _, err := sqlDB.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, def)); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
+	}
+	return nil
 }
 
 // Close 關閉資料庫連線。
@@ -188,8 +236,8 @@ func (d *DB) Store(mem *Memory) (int64, error) {
 	mem.Content = clean
 	mem.Redacted = n
 	res, err := d.db.Exec(
-		`INSERT INTO memories (type, content, tags, project) VALUES (?, ?, ?, ?)`,
-		mem.Type, mem.Content, mem.Tags, mem.Project,
+		`INSERT INTO memories (type, content, tags, project, source) VALUES (?, ?, ?, ?, ?)`,
+		mem.Type, mem.Content, mem.Tags, mem.Project, sourceOrUser(mem.Source),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: %w", err)
@@ -207,8 +255,8 @@ func (d *DB) Get(id int64) (*Memory, error) {
 	var m Memory
 	var created, updated string
 	err := d.db.QueryRow(
-		`SELECT id, type, content, tags, project, created, updated FROM memories WHERE id = ?`, id,
-	).Scan(&m.ID, &m.Type, &m.Content, &m.Tags, &m.Project, &created, &updated)
+		selectMemoryCols+` WHERE id = ?`, id,
+	).Scan(&m.ID, &m.Type, &m.Content, &m.Tags, &m.Project, &created, &updated, &m.Source)
 	if err != nil {
 		return nil, fmt.Errorf("get: %w", err)
 	}
@@ -217,7 +265,7 @@ func (d *DB) Get(id int64) (*Memory, error) {
 	return &m, nil
 }
 
-const selectMemoryCols = `SELECT id, type, content, tags, project, created, updated FROM memories`
+const selectMemoryCols = `SELECT id, type, content, tags, project, created, updated, source FROM memories`
 
 // queryMemories 執行 SELECT selectMemoryCols 查詢並掃描成 []Memory。
 func (d *DB) queryMemories(query string, args ...any) ([]Memory, error) {
@@ -230,7 +278,7 @@ func (d *DB) queryMemories(query string, args ...any) ([]Memory, error) {
 	for rows.Next() {
 		var m Memory
 		var created, updated string
-		if err := rows.Scan(&m.ID, &m.Type, &m.Content, &m.Tags, &m.Project, &created, &updated); err != nil {
+		if err := rows.Scan(&m.ID, &m.Type, &m.Content, &m.Tags, &m.Project, &created, &updated, &m.Source); err != nil {
 			return nil, err
 		}
 		m.Created, _ = time.Parse(timeLayout, created)
@@ -352,7 +400,7 @@ func parseSince(s string) (int, error) {
 
 // List 列出記憶，支援 type 過濾、since 時間範圍、limit 筆數。
 func (d *DB) List(opts ListOptions) ([]Memory, error) {
-	query := `SELECT id, type, content, tags, project, created, updated FROM memories`
+	query := selectMemoryCols
 	var args []any
 	var where []string
 
@@ -387,7 +435,7 @@ func (d *DB) List(opts ListOptions) ([]Memory, error) {
 	for rows.Next() {
 		var m Memory
 		var created, updated string
-		if err := rows.Scan(&m.ID, &m.Type, &m.Content, &m.Tags, &m.Project, &created, &updated); err != nil {
+		if err := rows.Scan(&m.ID, &m.Type, &m.Content, &m.Tags, &m.Project, &created, &updated, &m.Source); err != nil {
 			return nil, fmt.Errorf("list scan: %w", err)
 		}
 		m.Created, _ = time.Parse(timeLayout, created)
@@ -634,7 +682,7 @@ func (d *DB) ImportBatch(memories []Memory) (int, error) {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT INTO memories (type, content, tags, project) VALUES (?, ?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT INTO memories (type, content, tags, project, source) VALUES (?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("import prepare: %w", err)
 	}
@@ -642,7 +690,7 @@ func (d *DB) ImportBatch(memories []Memory) (int, error) {
 
 	var count int
 	for _, m := range memories {
-		if _, err := stmt.Exec(m.Type, m.Content, m.Tags, m.Project); err != nil {
+		if _, err := stmt.Exec(m.Type, m.Content, m.Tags, m.Project, sourceOrUser(m.Source)); err != nil {
 			return count, fmt.Errorf("import row: %w", err)
 		}
 		count++

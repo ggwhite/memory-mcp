@@ -221,3 +221,28 @@ func TestStoreOmitsDeletedWhenNoSupersedes(t *testing.T) {
 		t.Errorf("body = %v, want no deleted key", body)
 	}
 }
+
+func TestClientCarriesSource(t *testing.T) {
+	c, _ := testClient(t)
+	id, err := c.Store(&db.Memory{Type: "summary", Content: "LLM 摘要", Project: "p", Source: "llm:anthropic/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Get(id)
+	if err != nil || got.Source != "llm:anthropic/x" {
+		t.Fatalf("Get source = %q, err %v", got.Source, err)
+	}
+	if _, err := c.ImportBatch([]db.Memory{{Type: "til", Content: "舊匯出"}, {Type: "summary", Content: "合併", Project: "p", Source: "compact"}}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := c.ExportAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"LLM 摘要": "llm:anthropic/x", "舊匯出": "user", "合併": "compact"}
+	for _, m := range all {
+		if m.Source != want[m.Content] {
+			t.Errorf("%q source = %q, want %q", m.Content, m.Source, want[m.Content])
+		}
+	}
+}

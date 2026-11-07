@@ -11,7 +11,15 @@ import (
 	"time"
 
 	"github.com/ggwhite/memory-mcp/internal/db"
+	"github.com/ggwhite/memory-mcp/internal/llm"
 )
+
+// fakeLLM 把只看 prompt 的假函式包成 llm.Client。
+func fakeLLM(run func(context.Context, string) (string, error)) llm.Client {
+	return llm.FuncClient{ID: "fake", Fn: func(ctx context.Context, req llm.Request) (string, error) {
+		return run(ctx, req.Prompt)
+	}}
+}
 
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
@@ -95,7 +103,7 @@ func TestApplyMergesGroup(t *testing.T) {
 		prompts = append(prompts, prompt)
 		return "  合併後的內容 #7  \n", nil
 	}
-	outcomes := Apply(context.Background(), f.d, groups, Deps{Run: run})
+	outcomes := Apply(context.Background(), f.d, groups, Deps{LLM: fakeLLM(run)})
 	if len(outcomes) != 1 || outcomes[0].Err != nil || outcomes[0].NewID == 0 {
 		t.Fatalf("outcomes = %+v", outcomes)
 	}
@@ -111,7 +119,7 @@ func TestApplyMergesGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Type != "summary" || m.Project != "p" || m.Tags != "compacted,month:2025-03" {
+	if m.Type != "summary" || m.Project != "p" || m.Tags != "compacted,month:2025-03" || m.Source != "compact" {
 		t.Errorf("new memory = %+v", m)
 	}
 	if !m.Created.Equal(day("2025-03-20T10:00:00")) {
@@ -138,7 +146,7 @@ func TestApplyRunnerFailureKeepsRows(t *testing.T) {
 			f := seed(t)
 			groups, _ := Plan(f.d, "60d", "")
 			var logged []string
-			outcomes := Apply(context.Background(), f.d, groups, Deps{Run: run, Logf: func(format string, args ...any) {
+			outcomes := Apply(context.Background(), f.d, groups, Deps{LLM: fakeLLM(run), Logf: func(format string, args ...any) {
 				logged = append(logged, fmt.Sprintf(format, args...))
 			}})
 			if len(outcomes) != 1 || outcomes[0].Err == nil || outcomes[0].NewID != 0 {
@@ -163,7 +171,7 @@ func TestApplyChunksLargeGroup(t *testing.T) {
 		return fmt.Sprintf("段%d", calls), nil
 	}
 	// 每筆輸入約 25 字，上限 40 字 → 三筆各成一段，再合併三段結果
-	outcomes := Apply(context.Background(), f.d, groups, Deps{Run: run, MaxInputRunes: 40})
+	outcomes := Apply(context.Background(), f.d, groups, Deps{LLM: fakeLLM(run), MaxInputRunes: 40})
 	if outcomes[0].Err != nil {
 		t.Fatal(outcomes[0].Err)
 	}
@@ -185,7 +193,7 @@ func TestApplyChunksOversizeResults(t *testing.T) {
 		calls++
 		return strings.Repeat("長", 50), nil
 	}
-	outcomes := Apply(context.Background(), f.d, groups, Deps{Run: run, MaxInputRunes: 40})
+	outcomes := Apply(context.Background(), f.d, groups, Deps{LLM: fakeLLM(run), MaxInputRunes: 40})
 	if outcomes[0].Err != nil || calls != 4 {
 		t.Errorf("err=%v calls=%d, want 3 chunks + 1 final", outcomes[0].Err, calls)
 	}
