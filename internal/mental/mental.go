@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/ggwhite/memory-mcp/internal/db"
 	"github.com/ggwhite/memory-mcp/internal/llm"
@@ -23,6 +25,10 @@ const (
 	summaryLimit = 5
 	// observationLimit 一併送入的 active observation 筆數上限。
 	observationLimit = 20
+	// fallbackLimit 問題搜尋與 summary 都不足時，補入的最新 til／knowledge 筆數上限。
+	fallbackLimit = 10
+	// minTokenRunes 逐詞搜尋的最短 token 長度；trigram 索引至少要 3 個 rune。
+	minTokenRunes = 3
 	// entryRunes 單筆記憶送進 prompt 的上限，避免一筆超長記憶吃掉整個預算。
 	entryRunes = 2000
 )
@@ -111,8 +117,9 @@ type inputs struct {
 	memories     []db.Memory
 }
 
-// gather 收集 build 輸入：project 的 active observations、以問題搜尋（FTS／hybrid）的前 searchLimit 筆記憶、
-// 最新 summaryLimit 筆 summary；記憶依 id 去重，順序即 prompt 中的優先序（超過預算時從尾端捨棄）。
+// gather 收集 build 輸入：project 的 active observations、以問題搜尋（FTS／hybrid）的前 searchLimit 筆記憶
+// （整句命中不足時逐 token 補搜）、最新 summaryLimit 筆 summary，最後補最新的 til／knowledge 當最低優先 fallback；
+// 記憶依 id 去重，順序即 prompt 中的優先序（超過預算時從尾端捨棄）。
 func gather(d *db.DB, m db.MentalModel) (inputs, error) {
 	obs, err := d.ListObservations(db.ObservationFilter{Project: m.Project})
 	if err != nil {
@@ -129,6 +136,10 @@ func gather(d *db.DB, m db.MentalModel) (inputs, error) {
 	if err != nil {
 		return inputs{}, err
 	}
+	fallback, err := recentNotes(d, m.Project)
+	if err != nil {
+		return inputs{}, err
+	}
 	seen := make(map[int64]bool)
 	var mems []db.Memory
 	add := func(mem db.Memory) {
@@ -141,10 +152,70 @@ func gather(d *db.DB, m db.MentalModel) (inputs, error) {
 	for _, h := range hits {
 		add(h.Memory)
 	}
+	if len(hits) < searchLimit {
+		// 整句 AND 搜尋常因自然語句或無空白 CJK 而落空，改逐 token 搜尋補足。
+		for _, tok := range questionTokens(m.Question) {
+			if len(mems) >= searchLimit {
+				break
+			}
+			more, err := d.Search(db.SearchOptions{Query: tok, Project: m.Project, Limit: searchLimit})
+			if err != nil {
+				return inputs{}, fmt.Errorf("mental m%d token search: %w", m.ID, err)
+			}
+			for _, h := range more {
+				if len(mems) >= searchLimit {
+					break
+				}
+				add(h.Memory)
+			}
+		}
+	}
 	for _, s := range summaries {
 		add(s)
 	}
+	for _, n := range fallback {
+		add(n)
+	}
 	return inputs{observations: obs, memories: mems}, nil
+}
+
+// recentNotes 取 project 最新的 til／knowledge 合計 fallbackLimit 筆，由新到舊。
+func recentNotes(d *db.DB, project string) ([]db.Memory, error) {
+	var all []db.Memory
+	for _, typ := range []string{"til", "knowledge"} {
+		ms, err := d.RecentMemories(project, typ, fallbackLimit)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, ms...)
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		if !all[i].Created.Equal(all[j].Created) {
+			return all[i].Created.After(all[j].Created)
+		}
+		return all[i].ID > all[j].ID
+	})
+	if len(all) > fallbackLimit {
+		all = all[:fallbackLimit]
+	}
+	return all, nil
+}
+
+// questionTokens 把問題依空白與中英文標點切成 token，丟掉短於 minTokenRunes 的並去重，保留出現順序。
+func questionTokens(q string) []string {
+	fields := strings.FieldsFunc(q, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
+	})
+	seen := make(map[string]bool)
+	var out []string
+	for _, f := range fields {
+		if len([]rune(f)) < minTokenRunes || seen[f] {
+			continue
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
+	return out
 }
 
 const systemPrompt = `你負責替一個專案維護「長期問題」的答案，根據提供的記憶整理出目前最新、最可靠的結論。

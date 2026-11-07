@@ -247,3 +247,85 @@ func TestBuildPromptEscapesDelimiter(t *testing.T) {
 		t.Errorf("memory content must not close the data block:\n%s", f.reqs[0].Prompt)
 	}
 }
+
+func promptFor(t *testing.T, d *db.DB, question string) string {
+	t.Helper()
+	d.AddMentalModel("demo", question)
+	f := &fakeLLM{reply: answer("ok #1")}
+	if _, err := Build(context.Background(), d, f.client(), Options{Project: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.reqs) != 1 {
+		t.Fatalf("llm calls = %d, want 1", len(f.reqs))
+	}
+	return f.reqs[0].Prompt
+}
+
+func TestGatherTokenSearchWhenPhraseSparse(t *testing.T) {
+	d := testDB(t)
+	for _, m := range []db.Memory{
+		{Type: "feedback", Content: "kairos staging runs on port 8080", Project: "demo"},
+		{Type: "feedback", Content: "release checklist for the platform", Project: "demo"},
+	} {
+		d.Store(&m)
+	}
+	p := promptFor(t, d, "How do we deploy kairos?")
+	if !strings.Contains(p, "kairos staging") {
+		t.Errorf("token hit missing:\n%s", p)
+	}
+}
+
+func TestGatherTokenSearchCJK(t *testing.T) {
+	d := testDB(t)
+	d.Store(&db.Memory{Type: "feedback", Content: "部署流程需要先跑測試再發佈", Project: "demo"})
+	p := promptFor(t, d, "部署流程，怎麼發佈到正式環境")
+	if !strings.Contains(p, "部署流程需要") {
+		t.Errorf("CJK token hit missing:\n%s", p)
+	}
+}
+
+func TestGatherFallbackTilKnowledge(t *testing.T) {
+	d := testDB(t)
+	d.Store(&db.Memory{Type: "til", Content: "unrelated til note", Project: "demo"})
+	d.Store(&db.Memory{Type: "knowledge", Content: "unrelated knowledge note", Project: "demo"})
+	d.Store(&db.Memory{Type: "feedback", Content: "feedback not in fallback", Project: "demo"})
+	d.Store(&db.Memory{Type: "til", Content: "other project til", Project: "other"})
+	p := promptFor(t, d, "zzzzzz qqqqqq")
+	for _, want := range []string{"unrelated til note", "unrelated knowledge note"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("fallback missing %q:\n%s", want, p)
+		}
+	}
+	for _, bad := range []string{"feedback not in fallback", "other project til"} {
+		if strings.Contains(p, bad) {
+			t.Errorf("unexpected %q:\n%s", bad, p)
+		}
+	}
+}
+
+func TestGatherFallbackKeepsCapAndLimit(t *testing.T) {
+	d := testDB(t)
+	big := strings.Repeat("x", 1900)
+	for i := 0; i < 30; i++ {
+		d.Store(&db.Memory{Type: "til", Content: fmt.Sprintf("n%d %s", i, big), Project: "demo"})
+	}
+	in, err := gather(d, db.MentalModel{Project: "demo", Question: "zzzzzz"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(in.memories) != 10 {
+		t.Errorf("fallback memories = %d, want 10", len(in.memories))
+	}
+	p := promptFor(t, d, "zzzzzz")
+	if n := len([]rune(p)); n > InputBudgetRunes+1000 {
+		t.Errorf("prompt runes = %d exceeds cap", n)
+	}
+}
+
+func TestQuestionTokens(t *testing.T) {
+	got := questionTokens("How do we deploy kairos? 部署流程，怎麼發佈 (a-bc) deploy")
+	want := []string{"How", "deploy", "kairos", "部署流程", "怎麼發佈"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("tokens = %q, want %q", got, want)
+	}
+}
