@@ -13,7 +13,9 @@ import (
 type SearchOptions struct {
 	Query string
 	Type  string
-	Limit int // default 5
+	// Project 有值時只搜該 project 的記憶；空字串表示不限。
+	Project string
+	Limit   int // default 5
 	// Since、Until 依 created 過濾；支援相對（7d、24h、2w）與絕對
 	// YYYY-MM-DD，Until 的絕對日期含當天整天。空字串表示不限。
 	Since string
@@ -144,7 +146,7 @@ func (d *DB) Search(opts SearchOptions) ([]SearchResult, error) {
 		return ftsResults, nil
 	}
 
-	vectorIDs, err := d.vectorRank(queryVec, opts.Type, tr)
+	vectorIDs, err := d.vectorRank(queryVec, opts, tr)
 	if err != nil || len(vectorIDs) == 0 {
 		return ftsResults, nil
 	}
@@ -181,11 +183,7 @@ func (d *DB) ftsSearch(opts SearchOptions, tr timeRange, limit int) ([]SearchRes
 		WHERE memories_fts MATCH ?`
 	args := []any{ftsQuery(opts.Query)}
 
-	if opts.Type != "" {
-		query += ` AND m.type = ?`
-		args = append(args, opts.Type)
-	}
-
+	query, args = filterTypeProject(query, args, opts)
 	query, args = tr.apply(query, args, "m.created")
 
 	query += ` ORDER BY f.rank LIMIT ?`
@@ -223,17 +221,27 @@ func ftsQuery(input string) string {
 	return strings.Join(tokens, " ")
 }
 
-// vectorRank 計算 queryVec 與所有（依 type 篩選後）記憶向量的 cosine
+// filterTypeProject 依 opts.Type、opts.Project 對 m（memories 別名）加上過濾條件。
+func filterTypeProject(query string, args []any, opts SearchOptions) (string, []any) {
+	if opts.Type != "" {
+		query += ` AND m.type = ?`
+		args = append(args, opts.Type)
+	}
+	if opts.Project != "" {
+		query += ` AND m.project = ?`
+		args = append(args, opts.Project)
+	}
+	return query, args
+}
+
+// vectorRank 計算 queryVec 與所有（依 type、project 篩選後）記憶向量的 cosine
 // similarity，回傳依相似度由高到低排序的記憶 ID 清單。目前記憶量規模
 // （~220 筆）brute-force 全量計算即可，不做提前截斷。
-func (d *DB) vectorRank(queryVec []float32, typ string, tr timeRange) ([]int64, error) {
+func (d *DB) vectorRank(queryVec []float32, opts SearchOptions, tr timeRange) ([]int64, error) {
 	query := `SELECT e.memory_id, e.vector FROM memory_embeddings e
 		JOIN memories m ON m.id = e.memory_id WHERE 1=1`
 	var args []any
-	if typ != "" {
-		query += ` AND m.type = ?`
-		args = append(args, typ)
-	}
+	query, args = filterTypeProject(query, args, opts)
 	query, args = tr.apply(query, args, "m.created")
 
 	rows, err := d.db.Query(query, args...)

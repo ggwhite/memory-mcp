@@ -188,3 +188,28 @@ func TestRunRequestShape(t *testing.T) {
 		t.Errorf("request = %+v", got)
 	}
 }
+
+func TestRunCallsOnStoredOnlyAfterStore(t *testing.T) {
+	in, d := setup(t, fixture)
+	called := 0
+	var gotProject string
+	var gotID int64
+	dp := deps(d, "做了 X", &called)
+	dp.OnStored = func(project string, id int64) { gotProject, gotID = project, id }
+	if err := Run(context.Background(), in, dp); err != nil {
+		t.Fatal(err)
+	}
+	if gotProject != "globex" || gotID != 1 {
+		t.Errorf("OnStored = %q #%d", gotProject, gotID)
+	}
+
+	gotProject = ""
+	skip := deps(d, "SKIP", &called)
+	skip.OnStored = func(project string, id int64) { gotProject = project }
+	in2, d2 := setup(t, fixture)
+	skip.Store = d2
+	Run(context.Background(), in2, skip)
+	if gotProject != "" {
+		t.Errorf("OnStored called on skip")
+	}
+}

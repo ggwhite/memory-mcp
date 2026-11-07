@@ -530,7 +530,7 @@ func runSummarizeWorker(file string) {
 
 	// 每日次數上限記在本機 DB；--remote 時沒有本機 DB，不計次數。
 	local, _ := d.(*db.DB)
-	client, err := resolveLLM(local)
+	client, err := summarizeLLM(local)
 	if err != nil {
 		summarizeLogf("%s - worker: llm config: %v", in.SessionID, err)
 		return
@@ -542,8 +542,15 @@ func runSummarizeWorker(file string) {
 		Store: d,
 		LLM:   client,
 		Logf:  summarizeLogf,
+		// summary 寫入後在同一個背景 worker 內做增量 mental build，hook 前景路徑不受影響。
+		OnStored: func(project string, _ int64) {
+			buildMentalAfterSummary(local, client, project, in.SessionID)
+		},
 	})
 }
+
+// summarizeLLM 建立 SessionEnd worker 用的 LLM client，測試時替換成假實作。
+var summarizeLLM = resolveLLM
 
 var getCmd = &cobra.Command{
 	Use:   "get <id>...",

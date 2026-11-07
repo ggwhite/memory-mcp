@@ -135,6 +135,20 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 
 CREATE INDEX IF NOT EXISTS observations_project_active ON observations(project, active);
+
+CREATE TABLE IF NOT EXISTS mental_models (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    project           TEXT NOT NULL,
+    question          TEXT NOT NULL,
+    answer            TEXT NOT NULL DEFAULT '',
+    source_ids        TEXT NOT NULL DEFAULT '[]',
+    built_from_max_id INTEGER NOT NULL DEFAULT 0,
+    source            TEXT NOT NULL DEFAULT '',
+    created           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+    updated           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now'))
+);
+
+CREATE INDEX IF NOT EXISTS mental_models_project ON mental_models(project);
 `
 
 // sourceUser 未指定來源時的預設值（使用者／agent 手動寫入）。
@@ -591,11 +605,14 @@ type contextSection struct {
 	lines []string
 }
 
-// projectContext 專案索引：全域與專案 observations、全域 feedback、專案 feedback、專案 summary、專案其他記憶。
-// 段落順序即裁切優先序（fitBudget 從最後一段裁起），observations 與 feedback 放前面確保最後才被裁。
+// projectContext 專案索引，段落依序為：全域 observations、專案 observations、全域 feedback、
+// 專案 mental models、專案 feedback、專案 summary、專案其他記憶。
+// 段落順序即裁切優先序（fitBudget 從最後一段裁起）：其他記憶最先被裁，接著 summary、專案 feedback，
+// 再來才是 mental models，observations 與全域 feedback 最後才被裁。mental model 是整理過的答案，
+// 所以排在原始 summary 與 feedback 之前；只列出已 build（answer 非空）的 model。
 // personal- 開頭的 project 是個人記憶，home 是家目錄的雜項 session，兩者都不注入專案段。
 // active observation 的證據記憶不再以原始行出現；各段查詢多取「被隱藏筆數」再裁回原上限，
-// 讓隱藏的證據不佔名額。沒有 active observation 時輸出與加入 observations 之前逐 byte 相同。
+// 讓隱藏的證據不佔名額。沒有 active observation 與已 build 的 mental model 時，輸出與加入兩者之前逐 byte 相同。
 func (d *DB) projectContext(project string) (string, error) {
 	includeProject := !strings.HasPrefix(project, personalProjectPrefix) && project != homeProject
 	globalObs, err := d.contextObservations("global", 10)
@@ -623,7 +640,12 @@ func (d *DB) projectContext(project string) (string, error) {
 		return "", fmt.Errorf("context global: %w", err)
 	}
 	var feedback, summaries, others []Memory
+	var mentals []MentalModel
 	if includeProject {
+		mentals, err = d.contextMentalModels(project, 10)
+		if err != nil {
+			return "", fmt.Errorf("context mental models: %w", err)
+		}
 		feedback, err = d.queryMemories(selectMemoryCols+
 			` WHERE type = 'feedback' AND project = ? ORDER BY created DESC, id DESC LIMIT ?`, project, 20+extra)
 		if err != nil {
@@ -663,6 +685,7 @@ func (d *DB) projectContext(project string) (string, error) {
 		{"### 全域 observations", obsLines(globalObs)},
 		{fmt.Sprintf("### %s observations", project), obsLines(projectObs)},
 		{"### 全域 feedback", toLines(global, 10)},
+		{fmt.Sprintf("### %s mental models", project), mentalModelLines(mentals, contextSnippetRunes)},
 		{fmt.Sprintf("### %s feedback", project), toLines(feedback, 20)},
 		{fmt.Sprintf("### %s summary", project), toLines(summaries, 3)},
 		{fmt.Sprintf("### %s 其他記憶", project), toLines(others, 10)},

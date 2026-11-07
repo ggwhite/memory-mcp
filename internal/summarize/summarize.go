@@ -22,10 +22,12 @@ const (
 )
 
 // Deps Run 的外部依賴，測試時可替換。LLM 為 nil 表示沒有設定 LLM，Run 只記 log 並跳過。
+// OnStored 非 nil 時，在 summary 成功寫入後以 project 與新 id 呼叫（例如接著做 mental build）。
 type Deps struct {
-	Store db.Store
-	LLM   llm.Client
-	Logf  func(format string, args ...any)
+	Store    db.Store
+	LLM      llm.Client
+	Logf     func(format string, args ...any)
+	OnStored func(project string, id int64)
 }
 
 // BuildPrompt 組出摘要 prompt。
@@ -111,5 +113,8 @@ func Run(ctx context.Context, in hook.Input, deps Deps) error {
 		return err
 	}
 	logf("stored #%d", id)
+	if deps.OnStored != nil {
+		deps.OnStored(project, id)
+	}
 	return nil
 }
