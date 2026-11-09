@@ -5,6 +5,10 @@
   <img src="assets/banner-light.svg" alt="memory-mcp: cross-session memory for AI coding agents" width="100%">
 </picture>
 
+**Cross-session persistent memory for AI coding agents — one Go binary, one SQLite file.**
+
+Usable from the CLI, as an MCP server, and from Claude Code hooks that inject the right memories without the agent having to ask.
+
 <p>
   <a href="https://github.com/ggwhite/memory-mcp/actions/workflows/ci.yml"><img src="https://github.com/ggwhite/memory-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/ggwhite/memory-mcp" alt="Go version"></a>
@@ -12,15 +16,17 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-**Cross-session persistent memory for AI coding agents — one Go binary, one SQLite file, usable from the CLI, as an MCP server, and from Claude Code hooks.**
-
-[Install](#install) · [Quick start](#quick-start) · [MCP](#mcp) · [Hooks](#claude-code-hooks) · [CLI](#cli)
+[Install](#install) · [Quick start](#quick-start) · [Features](#features) · [MCP](#mcp) · [Hooks](#claude-code-hooks) · [CLI](#cli) · [Configuration](#configuration)
 
 </div>
 
-<br>
+---
 
-![memory-mcp demo: storing, searching, listing and deleting memories from the CLI](demo.gif)
+<div align="center">
+  <img src="assets/demo-tour.webp" alt="memory-mcp in 23 seconds: (1) the agent stores a til about Redis TTL for project my-app and a global feedback rule; (2) in a later session the UserPromptSubmit hook, recall --hook, reads the prompt about Redis session expiry and injects that til as one index line; (3) search --compact KEEPTTL finds it on demand, and get 41 prints its full content" width="900">
+  <br>
+  <sub>Store → automatic recall in a hook → search → fetch by id, all against one SQLite file.</sub>
+</div>
 
 ## Why
 
@@ -32,90 +38,85 @@ memory-mcp gives agents a small, durable, searchable memory that is **agent-agno
 
 <table>
 <tr>
-<td width="50%" valign="top">
+<td width="42%" valign="middle">
 
-**CJK-ready full-text search**<br>
-SQLite FTS5 with the `trigram` tokenizer, so Chinese/Japanese/Korean text is searchable without a word segmenter (queries need 3+ characters).
+### Context at session start
 
-</td>
-<td width="50%" valign="top">
-
-**Optional hybrid semantic search**<br>
-When a local Ollama is reachable, `search` fuses FTS5 and vector results with Reciprocal Rank Fusion; when it is not, it silently falls back to FTS5 only.
+On **SessionStart**, `context --hook` prints a bounded index: **global feedback**, the project's feedback, its **3 latest summaries**, and other til/knowledge — capped at **6,000 characters**. In `home` or a `personal-*` project only global feedback is injected.
 
 </td>
+<td><img src="assets/demo-context.webp" alt="SessionStart: context --hook reads the hook JSON for cwd my-app and prints global feedback, my-app feedback, the 3 latest my-app summaries and other my-app memories, one index line each, about 218 tokens"></td>
 </tr>
 <tr>
-<td valign="top">
+<td width="42%" valign="middle">
 
-**MCP server + full CLI**<br>
-7 MCP tools over stdio or Streamable HTTP. The CLI covers store, search, list, get, timeline, update, delete, stats, export/import, reindex, compact, consolidate, observation, mental, and llm.
+### Relevant memories on every prompt
 
-</td>
-<td valign="top">
-
-**Claude Code hooks**<br>
-`SessionStart` injects global rules and project memories, every `UserPromptSubmit` injects up to 3 relevant memories in under 300 ms, and `SessionEnd` writes a session summary (then refreshes that project's mental models) in the background.
+On every **UserPromptSubmit**, `recall --hook` turns the prompt into an FTS5 query and injects **at most 3 index lines** that pass a relevance threshold, bounded to **300 ms**. Memories already injected in the same session are **not repeated**. No LLM, no embeddings on this path.
 
 </td>
+<td><img src="assets/demo-recall.webp" alt="recall --hook reads the UserPromptSubmit JSON, injects the two relevant Redis memories in a few milliseconds, and injects nothing when the same session asks again"></td>
 </tr>
 <tr>
-<td valign="top">
+<td width="42%" valign="middle">
 
-**Memory hygiene**<br>
-`store --supersedes` replaces outdated rules in one transaction, `compact` rolls old summaries up by project and month, and stale summaries rank lower in `recall`.
+### CJK-ready, hybrid search
 
-</td>
-<td valign="top">
-
-**Token-efficient retrieval**<br>
-Search and context return one index line per memory; full content is fetched on demand by id.
+SQLite **FTS5 with the trigram tokenizer** finds Chinese/Japanese/Korean text without a word segmenter (3+ characters). With a local **Ollama**, results fuse with vector search through **Reciprocal Rank Fusion**; without it, FTS5 only. Narrow by `--type` and by creation time with **`--since` / `--until`**.
 
 </td>
+<td><img src="assets/demo-search.webp" alt="search --compact redis returns four index lines; adding --since 2026-11-01 keeps the two from November; --type til --until 2026-10-31 keeps only the older til"></td>
 </tr>
 <tr>
-<td valign="top">
+<td width="42%" valign="middle">
 
-**Remote mode**<br>
-Run one central REST server (`serve --http-api`) and point other machines at it with `--remote` / `MEMORY_MCP_REMOTE`.
+### Token-efficient retrieval
 
-</td>
-<td valign="top">
-
-**Secret hygiene**<br>
-`<private>...</private>` blocks are stripped and common key formats are replaced with `[REDACTED]` before anything is written.
+Search and context return **one index line per memory**. Full content is fetched **by id** with `get`, and `timeline` shows what was stored **before and after** a memory in the same project.
 
 </td>
+<td><img src="assets/demo-browse.webp" alt="get 7 prints the full til about EXPIRE and KEEPTTL; timeline 7 lists the two memories before and after it in my-app, with an arrow on #7"></td>
 </tr>
 <tr>
-<td valign="top">
+<td width="42%" valign="middle">
 
-**Optional LLM**<br>
-Summaries, `compact`, `consolidate` and mental models can use `claude -p`, the Anthropic API, or any OpenAI-compatible server (Ollama, LM Studio, OpenRouter). Paid providers are explicit opt-in, and hooks never call the LLM on the hot path.
+### Replace outdated rules
 
-</td>
-<td valign="top">
-
-**Consolidate &amp; observations**<br>
-`consolidate` merges near-duplicate feedback into one canonical observation with its evidence ids; it works without an LLM and is undoable with `observation delete`.
+When the user corrects a rule, `store --supersedes` stores the new one and **deletes the old ids in one transaction**; if any id is missing, nothing changes. No contradictions pile up.
 
 </td>
+<td><img src="assets/demo-supersedes.webp" alt="store feedback #1 'Mock the database in integration tests', then store --supersedes 1 'Use a real DB in integration tests' as #2; list --type feedback shows only #2"></td>
 </tr>
 <tr>
-<td valign="top">
+<td width="42%" valign="middle">
 
-**Mental models**<br>
-Standing per-project questions (`mental add`) whose answers are rebuilt from your memories and shown in the SessionStart context.
+### Roll up old summaries
 
-</td>
-<td valign="top">
-
-**Search time filter**<br>
-`search --since/--until` (and `since`/`until` on `memory_search`) limit results by creation time, with relative or absolute bounds.
+`compact` groups summaries older than **60 days** by **project and month** and merges each group of 2+ into one. It is a **dry run by default**; `--apply` writes a JSON backup first.
 
 </td>
+<td><img src="assets/demo-compact.webp" alt="list shows recent summaries; compact dry run groups five old my-app summaries into two monthly groups and changes nothing"></td>
+</tr>
+<tr>
+<td width="42%" valign="middle">
+
+### One memory, many machines
+
+Run **one central REST server** with `serve --http-api` and point other machines at it with **`--remote` / `MEMORY_MCP_REMOTE`**. Clients do not need Ollama; embeddings are computed on the central host.
+
+</td>
+<td><img src="assets/demo-remote.webp" alt="serve --http-api 127.0.0.1:8799 starts in the background; with MEMORY_MCP_REMOTE set, store saves memory #1 on the central host and stats reports it"></td>
 </tr>
 </table>
+
+### More
+
+- **MCP server + full CLI** — 7 MCP tools over stdio or Streamable HTTP; the CLI covers store, search, list, get, timeline, update, delete, stats, export/import, reindex, compact, consolidate, observation, mental, and llm.
+- **Session summaries** — `SessionEnd` writes a summary in the background (then refreshes that project's mental models); stale summaries rank lower in `recall`.
+- **Secret hygiene** — `<private>...</private>` blocks are stripped and common key formats are replaced with `[REDACTED]` before anything is written.
+- **Optional LLM** — summaries, `compact`, `consolidate` and mental models can use `claude -p`, the Anthropic API, or any OpenAI-compatible server. Paid providers are explicit opt-in, and hooks never call the LLM on the hot path.
+- **Consolidate & observations** — `consolidate` merges near-duplicate feedback into one canonical observation with its evidence ids; it works without an LLM and is undoable.
+- **Mental models** — standing per-project questions (`mental add`) whose answers are rebuilt from your memories and shown in the SessionStart context.
 
 ## Quick start
 
@@ -273,8 +274,6 @@ Add to `~/.claude/settings.json`:
 
 Each hook reads the Claude Code hook JSON from stdin (`session_id`, `cwd`, `prompt`, `transcript_path`) and never fails the hook: errors go to stderr or a log, and the exit code is 0.
 
-![recall --hook reads the UserPromptSubmit JSON, injects the two relevant memories in about 50 ms, and injects nothing when the same session asks again](assets/demo-recall.gif)
-
 - **`context --hook`** prints an index of: global feedback (`project=global`), the project's feedback, its 3 latest summaries, and other til/knowledge — capped at 6,000 characters (til/knowledge is trimmed first, feedback last). In a `personal-*` project or the `home` directory, only global feedback is injected. Memories with an empty project are never injected.
 - **`recall --hook`** extracts query terms from the prompt (alphanumeric runs of 3+ chars and overlapping 3-character CJK windows), runs an FTS5 query, and prints at most 3 index lines that pass a conservative relevance threshold. Thresholds use the raw score; for ordering only, `summary` memories decay with age (see [Memory hygiene](#memory-hygiene)). Prompts shorter than 4 characters or starting with `/` are skipped, memories already injected in the same session are not repeated, and the whole command is bounded to 300 ms. It only queries the local DB (no embeddings) and does not support `--remote`.
 - **`summarize --hook`** forks a background worker and returns immediately. The worker reads the transcript and asks the configured [LLM](#optional-llm) (by default `claude -p --model haiku`) to write a summary, stored as type `summary` with tag `auto-summary`. It skips sessions with fewer than 3 user turns or where a summary was already stored manually. If no LLM is configured it logs `skip: LLM not configured` and exits 0. Logs go to `summarize.log` next to the database.
@@ -334,8 +333,6 @@ A memory store is only useful if it stays correct. Three mechanisms keep old or 
 
 `store --supersedes 12,34` (or `supersedes` on `memory_store`) stores a corrected rule or newer decision and deletes the old ones in one transaction; if any id is missing, nothing changes.
 
-![store --supersedes 1 stores the corrected rule as #2 and deletes #1](assets/demo-supersedes.gif)
-
 ### Summary recency decay
 
 When `recall --hook` orders its matches, `summary` memories decay with age (half-life 90 days, floor 0.25), so newer summaries rank ahead of stale ones while an old summary that is the only match is still returned. Thresholds use the raw score, and other memory types never decay.
@@ -344,9 +341,12 @@ When `recall --hook` orders its matches, `summary` memories decay with age (half
 
 `compact` rolls old summaries up into one summary per project and month with `claude -p --model haiku`. It is a dry run by default and writes a JSON backup before any change.
 
-![compact dry run groups five old my-app summaries into two monthly groups and changes nothing](assets/demo-compact.gif)
+<details>
+<summary><b>How <code>compact</code> selects and merges</b></summary>
 
 `compact` selects `summary` memories older than `--older-than` (default `60d`) and groups them by project and month; only groups of 2+ are merged. With `--apply` it first writes every row it will delete to `backups/compact-<YYYYMMDD-HHMMSS>.json` next to the database (same format as `export`), then for each group asks `claude -p --model haiku` for one merged summary (done / key decisions / still unfinished, keeping `#id` references). The merged memory is tagged `compacted,month:YYYY-MM`, keeps the newest original's `created`, and replaces the originals in one transaction. A group whose LLM call fails or returns nothing is skipped and left untouched. Local DB only.
+
+</details>
 
 ## Optional LLM
 
@@ -370,6 +370,9 @@ export MEMORY_MCP_LLM_PROVIDER=anthropic MEMORY_MCP_LLM_API_KEY=sk-ant-...
 memory-mcp llm status   # resolved provider, models, today's call budget; never prints the key
 ```
 
+<details>
+<summary><b>All LLM variables</b></summary>
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MEMORY_MCP_LLM_PROVIDER` | unset | `anthropic`, `openai`, `claude-cli`, or `off`. |
@@ -379,6 +382,8 @@ memory-mcp llm status   # resolved provider, models, today's call budget; never 
 | `MEMORY_MCP_LLM_MODEL_SYNTH` | `claude-sonnet-5-5` (anthropic), `sonnet` (claude-cli) | Model for summaries and mental models. Required for `openai`. |
 | `MEMORY_MCP_LLM_DAILY_CALLS` | `50` | Daily call budget; `0` means unlimited. Over budget, the call is skipped and logged. |
 | `MEMORY_MCP_LLM_CLAUDE_KEEP_API_KEY` | unset | Set to `1` to keep `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` in the `claude -p` child process. By default they are removed so `claude -p` uses your subscription instead of silently billing a key. |
+
+</details>
 
 **Resolution order:**
 
@@ -403,10 +408,15 @@ memory-mcp observation list --project my-app
 memory-mcp observation delete o3                   # accepts 3 or o3
 ```
 
+<details>
+<summary><b>Flags and behavior</b></summary>
+
 Flags: `--project <p>` or `--all`, `--type` (default `feedback`), `--threshold` (character-trigram Jaccard, default `0.35`), `--cosine-threshold` (used when both memories have a vector from the same model, default `0.85`), `--max-cluster` (max members per cluster; larger similarity chains are split around seeds, default `20`), and `--apply`. The trigram default is conservative: short English feedback often needs `--threshold 0.25` to group, so preview a lower value before you `--apply` it. The default run only prints the plan and changes nothing; `--apply` first writes a JSON backup next to the database (same pattern as `compact`). Re-running refines an existing observation whose evidence overlaps instead of creating a duplicate, and skips groups whose evidence is unchanged. Local DB only (`--remote` is refused).
 
 - **With an LLM** (cheap tier), the model decides which members state the same rule and writes the canonical sentence in their dominant language; the observation's `source` is `llm:<provider/model>`.
 - **Without an LLM**, the canonical text is the newest member's content and `source` is `heuristic`; the output says `LLM: not configured ..., using heuristic`.
+
+</details>
 
 **In context:** `SessionStart` shows `### 全域 observations` and `### <project> observations` first, one line each: `- o3 ×2 <canonical> (ev: #1 #2)`. Memories that are evidence of an active observation are dropped from the raw feedback sections. With no observations the output is unchanged.
 
@@ -423,7 +433,12 @@ memory-mcp mental build --project my-app           # or --all; --force rebuilds 
 memory-mcp mental rm m3                            # accepts 3 or m3
 ```
 
+<details>
+<summary><b>What goes into a build</b></summary>
+
 The build input is the project's active observations, the top 20 memories matching the question (full-phrase search first, then one search per word, which helps natural-language and unspaced CJK questions), the 5 newest summaries, and, when those run thin, the newest `til` / `knowledge` notes, all deduplicated and capped at about 12,000 characters. The answer is at most 12 lines in the memories' language and cites sources as `#id` / `o<id>`. A project is skipped when it has no memory newer than the last build, unless `--force`. A failed or empty answer keeps the previous one.
+
+</details>
 
 **In context:** `SessionStart` adds a `### <project> mental models` section after the global observations and feedback and before the project's feedback; each model renders as `**Q:** question` followed by its answer lines, trimmed by the same budget as other sections. With no models the output is unchanged. When a `SessionEnd` summary is written and the project has mental models, the same background worker runs the incremental build; failures are only logged.
 
@@ -438,7 +453,12 @@ Keep observations and mental models fresh with a scheduled job:
 30 3 * * * { memory-mcp consolidate --all --apply && memory-mcp mental build --all; } >> ~/.local/share/memory-mcp/nightly.log 2>&1
 ```
 
+<details>
+<summary><b>macOS (launchd)</b></summary>
+
 On macOS, put the same command in a launchd agent (`~/Library/LaunchAgents/com.example.memory-mcp-nightly.plist`) with `ProgramArguments` of `/bin/sh -c "{ memory-mcp consolidate --all --apply && memory-mcp mental build --all; } >> ~/.local/share/memory-mcp/nightly.log 2>&1"` (or set `StandardOutPath` / `StandardErrorPath` to the log instead of redirecting) and a `StartCalendarInterval` of `Hour` 3 / `Minute` 30; use the absolute path of the binary, since launchd does not load your shell `PATH`. Mind `MEMORY_MCP_LLM_DAILY_CALLS` if you have many projects.
+
+</details>
 
 ## CLI
 
@@ -546,7 +566,7 @@ make test    # go test ./...
 make lint    # go vet ./...
 ```
 
-The GIFs are recorded with [VHS](https://github.com/charmbracelet/vhs) against throwaway databases in `/tmp`: `vhs demo.tape`, `vhs assets/demo-recall.tape`, and so on, run from the repo root.
+The clips are recorded with [VHS](https://github.com/charmbracelet/vhs) against throwaway databases in `/tmp` and converted to animated WebP: `assets/render.sh` renders every `assets/*.tape`, `assets/render.sh demo-recall` just one (needs `vhs`, `ffmpeg` and `img2webp` from libwebp).
 
 ## Acknowledgements
 
